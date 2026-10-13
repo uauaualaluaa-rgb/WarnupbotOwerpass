@@ -7,7 +7,6 @@ import re
 import hashlib
 import shutil
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -16,14 +15,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery,
-    FSInputFile
+    ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
 )
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from telethon import TelegramClient, events
 
-# ==================== КОНФИГУРАЦИЯ ====================
+# ==================== КОНФИГ ====================
 BOT_TOKEN = "8862811439:AAGKNCDLKgfHnhxsKoTH3CuzaLfnPb659R4"
 ADMIN_ID = 8543473783
 CHANNEL_ID = "-1004311525622"
@@ -99,6 +97,74 @@ def load_chat_history(): return load_json(CHAT_HISTORY_FILE)
 def save_chat_history(c): save_json(CHAT_HISTORY_FILE, c)
 
 
+# ==================== ОПРЕДЕЛЕНИЕ СТРАНЫ ПО НОМЕРУ ====================
+COUNTRY_CODES = {
+    "95": ("mm", "🇲🇲 Мьянма"),
+    "1": ("us", "🇺🇸 США"),
+    "57": ("co", "🇨🇴 Колумбия"),
+    "880": ("bd", "🇧🇩 Бангладеш"),
+    "33": ("fr", "🇫🇷 Франция"),
+    "55": ("br", "🇧🇷 Бразилия"),
+    "998": ("uz", "🇺🇿 Узбекистан"),
+    "66": ("th", "🇹🇭 Таиланд"),
+    "44": ("gb", "🇬🇧 Великобритания"),
+    "380": ("ua", "🇺🇦 Украина"),
+    "375": ("by", "🇧🇾 Беларусь"),
+    "77": ("kz", "🇰🇿 Казахстан"),
+    "7": ("ru", "🇷🇺 Россия"),
+    "48": ("pl", "🇵🇱 Польша"),
+    "49": ("de", "🇩🇪 Германия"),
+    "36": ("hu", "🇭🇺 Венгрия"),
+    "299": ("gl", "🇬🇱 Гренландия"),
+    "995": ("ge", "🇬🇪 Грузия"),
+    "994": ("az", "🇦🇿 Азербайджан"),
+    "996": ("kg", "🇰🇬 Киргизия"),
+    "373": ("md", "🇲🇩 Молдова"),
+    "371": ("lv", "🇱🇻 Латвия"),
+    "370": ("lt", "🇱🇹 Литва"),
+    "372": ("ee", "🇪🇪 Эстония"),
+    "90": ("tr", "🇹🇷 Турция"),
+    "972": ("il", "🇮🇱 Израиль"),
+    "91": ("in", "🇮🇳 Индия"),
+    "86": ("cn", "🇨🇳 Китай"),
+    "81": ("jp", "🇯🇵 Япония"),
+    "82": ("kr", "🇰🇷 Корея"),
+    "84": ("vn", "🇻🇳 Вьетнам"),
+    "63": ("ph", "🇵🇭 Филиппины"),
+    "62": ("id", "🇮🇩 Индонезия"),
+    "60": ("my", "🇲🇾 Малайзия"),
+    "65": ("sg", "🇸🇬 Сингапур"),
+    "46": ("se", "🇸🇪 Швеция"),
+    "47": ("no", "🇳🇴 Норвегия"),
+    "45": ("dk", "🇩🇰 Дания"),
+    "358": ("fi", "🇫🇮 Финляндия"),
+    "351": ("pt", "🇵🇹 Португалия"),
+    "39": ("it", "🇮🇹 Италия"),
+    "34": ("es", "🇪🇸 Испания"),
+    "31": ("nl", "🇳🇱 Нидерланды"),
+    "32": ("be", "🇧🇪 Бельгия"),
+    "41": ("ch", "🇨🇭 Швейцария"),
+    "43": ("at", "🇦🇹 Австрия"),
+    "420": ("cz", "🇨🇿 Чехия"),
+    "421": ("sk", "🇸🇰 Словакия"),
+}
+
+
+def detect_country(phone: str) -> tuple:
+    """Определяет (код_страны, название) по номеру телефона"""
+    if not phone:
+        return ("unknown", "❓ Неизвестно")
+    
+    clean = phone.replace("+", "").replace(" ", "").replace("-", "")
+    
+    for length in (3, 2, 1):
+        prefix = clean[:length]
+        if prefix in COUNTRY_CODES:
+            return COUNTRY_CODES[prefix]
+    
+    return ("unknown", "❓ Неизвестно")
+
+
 # ==================== СКЛАД ====================
 def country_dir(country: str) -> str:
     return os.path.join(ACCOUNTS_DIR, country)
@@ -116,31 +182,6 @@ def meta_path(country: str, session_name: str) -> str:
     return os.path.join(country_dir(country), f"{session_name}.json")
 
 
-def add_account(session_src: str, country: str, phone: str, price_uah, price_stars: int):
-    os.makedirs(country_dir(country), exist_ok=True)
-    name = os.path.basename(session_src).replace(".session", "")
-    dst = session_path(country, name)
-    dst_watcher = watcher_path(country, name)
-
-    shutil.copy(session_src, dst)
-    shutil.copy(session_src, dst_watcher)
-
-    meta = {
-        "country": country,
-        "session_name": name,
-        "phone": phone,
-        "price_uah": price_uah,
-        "price_stars": price_stars,
-        "status": "available",
-        "added_at": datetime.now().isoformat(),
-        "sold_at": None,
-        "sold_to": None,
-    }
-    with open(meta_path(country, name), "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-    return meta
-
-
 def load_meta(country: str, name: str):
     p = meta_path(country, name)
     if not os.path.exists(p):
@@ -152,6 +193,42 @@ def load_meta(country: str, name: str):
 def save_meta(country: str, name: str, meta: dict):
     with open(meta_path(country, name), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+async def analyze_session(session_file: str) -> dict:
+    """Читает данные аккаунта из .session"""
+    client = TelegramClient(session_file.replace(".session", ""), API_ID, API_HASH)
+    result = {"valid": False, "phone": None, "user_id": None, "first_name": None}
+    
+    try:
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            result["error"] = "NOT_AUTHORIZED"
+            return result
+        
+        me = await client.get_me()
+        if not me:
+            result["error"] = "NO_ME"
+            return result
+        
+        result.update({
+            "valid": True,
+            "phone": me.phone,
+            "user_id": me.id,
+            "first_name": me.first_name,
+            "username": me.username,
+            "premium": getattr(me, "premium", False),
+        })
+    except Exception as e:
+        result["error"] = f"{type(e).__name__}: {str(e)[:100]}"
+    finally:
+        try:
+            await client.disconnect()
+        except:
+            pass
+    
+    return result
 
 
 def all_available(country: str = None) -> list:
@@ -388,7 +465,6 @@ async def add_user(user_id, username=None, full_name=None, ref_code=None):
 DEFAULT_REQUISITES = {
     "uah": "💳 Карта Моно: 4874 0700 2513 7454",
     "stars": "⭐ Отправьте звёзды в ЛС: @MaskYoY",
-    "nft": "🖼 NFT оплата в ЛС: @MaskYoY",
 }
 if not os.path.exists(REQUISITES_FILE):
     save_requisites(DEFAULT_REQUISITES)
@@ -404,47 +480,45 @@ CATEGORIES = {
     "regular": {
         "name": "📞 ОБЫЧНЫЕ НОМЕРА",
         "products": {
-            "🇲🇲 Мьянма (+95)": {"uah": 30, "stars": 40, "emoji": "🇲🇲", "code": "95"},
-            "🇺🇸 США (+1)": {"uah": 45, "stars": 65, "emoji": "🇺🇸", "code": "1"},
-            "🇨🇴 Колумбия (+57)": {"uah": 45, "stars": 65, "emoji": "🇨🇴", "code": "57"},
-            "🇧🇩 Бангладеш (+880)": {"uah": 45, "stars": 65, "emoji": "🇧🇩", "code": "880"},
-            "🇫🇷 Франция (+33)": {"uah": 75, "stars": 100, "emoji": "🇫🇷", "code": "33"},
-            "🇧🇷 Бразилия (+55)": {"uah": 75, "stars": 100, "emoji": "🇧🇷", "code": "55"},
-            "🇺🇿 Узбекистан (+998)": {"uah": 75, "stars": 100, "emoji": "🇺🇿", "code": "998"},
-            "🇹🇭 Таиланд (+66)": {"uah": 80, "stars": 100, "emoji": "🇹🇭", "code": "66"},
-            "🇬🇧 Великобритания (+44)": {"uah": 120, "stars": 115, "emoji": "🇬🇧", "code": "44"},
-            "🇺🇦 Украина (+380)": {"uah": 150, "stars": 150, "emoji": "🇺🇦", "code": "380"},
-            "🇧🇾 Беларусь (+375)": {"uah": 150, "stars": 200, "emoji": "🇧🇾", "code": "375"},
-            "🇰🇿 Казахстан (+7)": {"uah": 150, "stars": 200, "emoji": "🇰🇿", "code": "77"},
-            "🇵🇱 Польша (+48)": {"uah": 150, "stars": 200, "emoji": "🇵🇱", "code": "48"},
-            "🇷🇺 Россия (+7)": {"uah": 150, "stars": 200, "emoji": "🇷🇺", "code": "7"},
-            "🇩🇪 Германия (+49)": {"uah": 150, "stars": 200, "emoji": "🇩🇪", "code": "49"},
+            "🇲🇲 Мьянма (+95)": {"uah": 30, "stars": 40, "emoji": "🇲🇲", "code": "mm"},
+            "🇺🇸 США (+1)": {"uah": 45, "stars": 65, "emoji": "🇺🇸", "code": "us"},
+            "🇨🇴 Колумбия (+57)": {"uah": 45, "stars": 65, "emoji": "🇨🇴", "code": "co"},
+            "🇧🇩 Бангладеш (+880)": {"uah": 45, "stars": 65, "emoji": "🇧🇩", "code": "bd"},
+            "🇫🇷 Франция (+33)": {"uah": 75, "stars": 100, "emoji": "🇫🇷", "code": "fr"},
+            "🇧🇷 Бразилия (+55)": {"uah": 75, "stars": 100, "emoji": "🇧🇷", "code": "br"},
+            "🇺🇿 Узбекистан (+998)": {"uah": 75, "stars": 100, "emoji": "🇺🇿", "code": "uz"},
+            "🇹🇭 Таиланд (+66)": {"uah": 80, "stars": 100, "emoji": "🇹🇭", "code": "th"},
+            "🇬🇧 Великобритания (+44)": {"uah": 120, "stars": 115, "emoji": "🇬🇧", "code": "gb"},
+            "🇺🇦 Украина (+380)": {"uah": 150, "stars": 150, "emoji": "🇺🇦", "code": "ua"},
+            "🇧🇾 Беларусь (+375)": {"uah": 150, "stars": 200, "emoji": "🇧🇾", "code": "by"},
+            "🇰🇿 Казахстан (+7)": {"uah": 150, "stars": 200, "emoji": "🇰🇿", "code": "kz"},
+            "🇵🇱 Польша (+48)": {"uah": 150, "stars": 200, "emoji": "🇵🇱", "code": "pl"},
+            "🇷🇺 Россия (+7)": {"uah": 150, "stars": 200, "emoji": "🇷🇺", "code": "ru"},
+            "🇩🇪 Германия (+49)": {"uah": 150, "stars": 200, "emoji": "🇩🇪", "code": "de"},
         },
     },
     "premium": {
-        "name": "⭐️ НОМЕРА С TELEGRAM PREMIUM",
+        "name": "⭐️ НОМЕРА С PREMIUM",
         "products": {
-            "🇺🇸 США (+1)": {"uah": 180, "stars": 250, "emoji": "🇺🇸", "code": "1"},
-            "🇨🇦 Канада (+1)": {"uah": 180, "stars": 250, "emoji": "🇨🇦", "code": "1"},
-            "🇺🇿 Узбекистан (+998)": {"uah": 350, "stars": 400, "emoji": "🇺🇿", "code": "998"},
-            "🇺🇦 Украина (+380)": {"uah": 350, "stars": 400, "emoji": "🇺🇦", "code": "380"},
-            "🇰🇿 Казахстан (+7)": {"uah": 400, "stars": 500, "emoji": "🇰🇿", "code": "77"},
-            "🇩🇪 Германия (+49)": {"uah": 400, "stars": 500, "emoji": "🇩🇪", "code": "49"},
+            "🇺🇸 США (+1)": {"uah": 180, "stars": 250, "emoji": "🇺🇸", "code": "us"},
+            "🇺🇿 Узбекистан (+998)": {"uah": 350, "stars": 400, "emoji": "🇺🇿", "code": "uz"},
+            "🇺🇦 Украина (+380)": {"uah": 350, "stars": 400, "emoji": "🇺🇦", "code": "ua"},
+            "🇰🇿 Казахстан (+7)": {"uah": 400, "stars": 500, "emoji": "🇰🇿", "code": "kz"},
+            "🇩🇪 Германия (+49)": {"uah": 400, "stars": 500, "emoji": "🇩🇪", "code": "de"},
         },
     },
     "physical": {
-        "name": "☎️ ФИЗ НОМЕРА TELEGRAM",
+        "name": "☎️ ФИЗ НОМЕРА",
         "products": {
-            "🇺🇸 США (+1)": {"uah": 100, "stars": 150, "emoji": "🇺🇸", "code": "1"},
-            "🇺🇦 Украина (+380)": {"uah": 200, "stars": 300, "emoji": "🇺🇦", "code": "380"},
-            "🇺🇿 Узбекистан (+998)": {"uah": 100, "stars": 150, "emoji": "🇺🇿", "code": "998"},
-            "🇨🇴 Колумбия (+57)": {"uah": 100, "stars": 150, "emoji": "🇨🇴", "code": "57"},
-            "🇹🇭 Таиланд (+66)": {"uah": 120, "stars": 175, "emoji": "🇹🇭", "code": "66"},
-            "🇫🇷 Франция (+33)": {"uah": 150, "stars": 200, "emoji": "🇫🇷", "code": "33"},
-            "🇰🇿 Казахстан (+77)": {"uah": 200, "stars": 300, "emoji": "🇰🇿", "code": "77"},
-            "🇭🇺 Венгрия (+36)": {"uah": 200, "stars": 300, "emoji": "🇭🇺", "code": "36"},
-            "🇬🇱 Гренландия (+299)": {"uah": 250, "stars": 350, "emoji": "🇬🇱", "code": "299"},
-            "🇵🇱 Польша (+48)": {"uah": 250, "stars": 350, "emoji": "🇵🇱", "code": "48"},
+            "🇺🇸 США (+1)": {"uah": 100, "stars": 150, "emoji": "🇺🇸", "code": "us"},
+            "🇺🇦 Украина (+380)": {"uah": 200, "stars": 300, "emoji": "🇺🇦", "code": "ua"},
+            "🇺🇿 Узбекистан (+998)": {"uah": 100, "stars": 150, "emoji": "🇺🇿", "code": "uz"},
+            "🇨🇴 Колумбия (+57)": {"uah": 100, "stars": 150, "emoji": "🇨🇴", "code": "co"},
+            "🇹🇭 Таиланд (+66)": {"uah": 120, "stars": 175, "emoji": "🇹🇭", "code": "th"},
+            "🇰🇿 Казахстан (+77)": {"uah": 200, "stars": 300, "emoji": "🇰🇿", "code": "kz"},
+            "🇭🇺 Венгрия (+36)": {"uah": 200, "stars": 300, "emoji": "🇭🇺", "code": "hu"},
+            "🇬🇱 Гренландия (+299)": {"uah": 250, "stars": 350, "emoji": "🇬🇱", "code": "gl"},
+            "🇵🇱 Польша (+48)": {"uah": 250, "stars": 350, "emoji": "🇵🇱", "code": "pl"},
         },
     },
 }
@@ -458,9 +532,7 @@ class ReviewStates(StatesGroup):
 
 
 class OrderStates(StatesGroup):
-    waiting_for_category = State()
     waiting_for_quantity = State()
-    waiting_for_custom_quantity = State()
     waiting_for_payment_method = State()
     waiting_for_confirmation = State()
 
@@ -470,16 +542,12 @@ class CheckoutPromoStates(StatesGroup):
 
 
 class AdminStates(StatesGroup):
-    waiting_for_phone = State()
-    waiting_for_code = State()
     waiting_for_requisites_edit = State()
     waiting_for_broadcast = State()
 
 
 class AdminStockStates(StatesGroup):
     waiting_for_session = State()
-    waiting_for_country = State()
-    waiting_for_phone = State()
     waiting_for_price_uah = State()
     waiting_for_price_stars = State()
 
@@ -490,14 +558,6 @@ class AdminPromoStates(StatesGroup):
     waiting_for_discount_value = State()
     waiting_for_max_uses = State()
     waiting_for_expires_date = State()
-
-
-class AdminPromotionStates(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_description = State()
-    waiting_for_products = State()
-    waiting_for_new_prices = State()
-    waiting_for_duration = State()
 
 
 class AdminBroadcastTemplateStates(StatesGroup):
@@ -537,11 +597,11 @@ STATUS_CONFIG = {
 
 
 def method_label(m):
-    return {"uah": "Гривны (₴)", "stars": "Telegram Stars (⭐)", "nft": "NFT (TON)"}.get(m, m)
+    return {"uah": "Гривны (₴)", "stars": "Telegram Stars (⭐)"}.get(m, m)
 
 
 def method_symbol(m):
-    return {"uah": "₴", "stars": "⭐", "nft": "💎"}.get(m, "")
+    return {"uah": "₴", "stars": "⭐"}.get(m, "")
 
 
 def generate_short_order_id():
@@ -616,7 +676,6 @@ async def process_referral_bonus(referrer_id, referred_id, order_total):
         "max_uses": 1, "current_uses": 0,
         "expires_at": (datetime.now() + timedelta(days=30)).isoformat(),
         "is_active": True, "created_at": datetime.now().isoformat(),
-        "description": f"Реферальный бонус за покупку {referred_id}",
     }
     save_promo_codes(promo_codes)
     for ref in rdata["referrals_list"]:
@@ -630,34 +689,13 @@ async def process_referral_bonus(referrer_id, referred_id, order_total):
     try:
         await bot.send_message(
             chat_id=referrer_id,
-            text=(f"🎁 Вы получили реферальный бонус!\n"
-                  f"Ваш реферал совершил первую покупку.\n"
-                  f"Сумма бонуса: {bonus_amount:.2f} грн\n\n"
-                  f"Ваш промокод: <code>{code}</code>\n"
-                  f"Промокод одноразовый и действует 30 дней."),
+            text=(f"🎁 Реферальный бонус!\n"
+                  f"Сумма: {bonus_amount:.2f} грн\n"
+                  f"Промокод: <code>{code}</code>"),
             parse_mode="HTML",
         )
     except:
         pass
-
-
-def update_traffic_source_stats(source_name, purchases=0, revenue=0.0):
-    if not source_name:
-        return
-    try:
-        revenue = float(revenue)
-    except:
-        revenue = 0.0
-    sources = load_traffic_sources()
-    if source_name not in sources:
-        sources[source_name] = {
-            "total_visits": 0, "total_registrations": 0,
-            "total_purchases": 0, "total_revenue": 0.0,
-            "created_at": datetime.now().isoformat(),
-        }
-    sources[source_name]["total_purchases"] += purchases
-    sources[source_name]["total_revenue"] += revenue
-    save_traffic_sources(sources)
 
 
 async def check_subscription(user_id):
@@ -666,30 +704,6 @@ async def check_subscription(user_id):
         return member.status in ["member", "administrator", "creator"]
     except:
         return False
-
-
-async def schedule_reminder(order_id, delay_seconds=300):
-    await asyncio.sleep(delay_seconds)
-    orders = load_orders()
-    real_key = find_order_key(orders, order_id)
-    if not real_key:
-        return
-    order = orders[real_key]
-    if order["status"] == "completed" and not order.get("reviewed") and not order.get("reminder_sent"):
-        order["reminder_sent"] = True
-        save_orders(orders)
-        try:
-            kb = InlineKeyboardBuilder()
-            kb.button(text="⭐ Оставить отзыв", callback_data=f"leave_review_{real_key}")
-            kb.button(text="📋 Мои заказы", callback_data="my_orders")
-            kb.adjust(1)
-            await bot.send_message(
-                chat_id=order["user_id"],
-                text=f"👋 Напоминаем про отзыв по заказу {order.get('short_id', real_key)}.",
-                reply_markup=kb.as_markup(),
-            )
-        except:
-            pass
 
 
 # ==================== КЛАВИАТУРЫ ====================
@@ -719,7 +733,7 @@ def get_admin_reply_keyboard():
 
 def subscribe_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="📢 Подписаться на Магазин", url="http://t.me/owerpass_store")
+    kb.button(text="📢 Подписаться", url="http://t.me/owerpass_store")
     kb.button(text="✅ Я подписался", callback_data="check_sub")
     kb.adjust(1)
     return kb.as_markup()
@@ -760,7 +774,7 @@ def category_products_keyboard(category):
             display = f"{product_name} — {in_stock} шт. | {price_data['uah']}₴ / {price_data['stars']}⭐"
             cb = f"product_{category}_{code}"
         else:
-            display = f"❌ {product_name} — НЕТ В НАЛИЧИИ"
+            display = f"❌ {product_name} — НЕТ"
             cb = "out_of_stock"
 
         kb.button(text=display, callback_data=cb)
@@ -791,7 +805,6 @@ def payment_method_keyboard():
 def confirm_order_keyboard():
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Подтвердить заказ", callback_data="confirm_order")
-    kb.button(text="🎟 Применить промокод", callback_data="apply_promo_at_checkout")
     kb.button(text="❌ Отмена", callback_data="main_menu")
     kb.adjust(1)
     return kb.as_markup()
@@ -802,14 +815,6 @@ def awaiting_payment_keyboard(order_id):
     kb.button(text="💬 Написать продавцу", url="https://t.me/MaskYoY")
     kb.button(text="🆘 Написать в боте", callback_data=f"support_{order_id}")
     kb.button(text="📋 Мои заказы", callback_data="my_orders")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def user_number_actions_keyboard(order_id):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔑 Запросить код", callback_data=f"request_code_{order_id}")
-    kb.button(text="🆘 Написать в боте", callback_data=f"support_{order_id}")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -947,25 +952,13 @@ def admin_dashboard_keyboard():
     kb.button(text="📦 Заказы", callback_data="admin_orders_dashboard")
     kb.button(text="📦 Склад", callback_data="admin_stock_menu")
     kb.button(text="👥 Рефералы", callback_data="admin_referrals_dashboard")
-    kb.button(text="🔥 Акции", callback_data="admin_promotions_dashboard")
     kb.button(text="🎟 Промокоды", callback_data="admin_promo_dashboard")
     kb.button(text="⭐ Уровни", callback_data="admin_levels_dashboard")
     kb.button(text="📢 Рассылки", callback_data="admin_broadcasts_dashboard")
     kb.button(text="📊 Аналитика", callback_data="admin_analytics_dashboard")
     kb.button(text="🔗 Источники", callback_data="admin_traffic_dashboard")
     kb.button(text="🔄 Обновить", callback_data="admin_dashboard_refresh")
-    kb.adjust(2, 2, 2, 2, 1, 1)
-    return kb.as_markup()
-
-
-def admin_promotions_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Создать акцию", callback_data="admin_create_promotion")
-    for pid, promo in list(load_promotions().items())[:10]:
-        status = "🟢" if promo.get("is_active", True) else "🔴"
-        kb.button(text=f"{status} {promo.get('name', 'Без названия')}", callback_data=f"admin_promo_detail_{pid}")
-    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
-    kb.adjust(1)
+    kb.adjust(2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
@@ -1029,19 +1022,14 @@ FAQ_TEXT = """
 3️⃣ Подтвердите заказ
 4️⃣ Оплатите — аккаунт выдастся автоматически
 
-📱 <b>Как войти в аккаунт:</b>
-1. Получите файл <code>.session</code> после оплаты
-2. Используйте его в Telethon или замените tdata
-3. Когда Telegram запросит код — нажмите «🔑 Запросить код»
+📱 <b>Как войти:</b>
+1. Получите .session после оплаты
+2. Войдите в Telegram
+3. Когда придёт код — нажмите «🔑 Запросить код»
 4. Бот автоматически перешлёт код в этот чат
 
-🎁 <b>Бонусы:</b>
-• 5% реферальный бонус промокодом
-• Скидки по уровням: Бронза → VIP
-
-📞 <b>Контакты:</b>
-• Продавец: @MaskYoY
-• Канал: @owerpass_store
+📞 Продавец: @MaskYoY
+📢 Канал: @owerpass_store
 """
 
 
@@ -1060,16 +1048,14 @@ async def cmd_start(message: types.Message):
         return
 
     if not await check_subscription(message.from_user.id):
-        await message.answer("⚠️ Подпишитесь на канал магазина!", reply_markup=subscribe_keyboard())
+        await message.answer("⚠️ Подпишитесь на канал!", reply_markup=subscribe_keyboard())
         return
 
     text = "👋 Добро пожаловать в OverPass Store!\n"
     text += "🔹 Продажа номеров Telegram\n"
     text += "🔹 Автоматическая выдача\n"
-
     if is_new and ref_code and ref_code.startswith("ref_"):
         text += "🎁 Вы зарегистрированы по реферальной ссылке!\n"
-
     text += "Выберите раздел:"
     await message.answer(text, reply_markup=get_main_reply_keyboard())
 
@@ -1081,13 +1067,13 @@ async def process_check_sub(callback: types.CallbackQuery):
         try:
             await callback.message.edit_text("🎉 Спасибо за подписку!", reply_markup=main_menu_keyboard())
         except:
-            await callback.message.answer("🎉 Спасибо за подписку!", reply_markup=main_menu_keyboard())
-        await callback.message.answer("Используйте кнопки для навигации:", reply_markup=get_main_reply_keyboard())
+            await callback.message.answer("🎉 Спасибо!", reply_markup=main_menu_keyboard())
+        await callback.message.answer("Навигация:", reply_markup=get_main_reply_keyboard())
     else:
         await callback.answer("❌ Вы не подписались!", show_alert=True)
 
 
-# ==================== АДМИН: СКЛАД ====================
+# ==================== АДМИН: СКЛАД (АВТООПРЕДЕЛЕНИЕ) ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📦 Склад")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_stock_menu")
 async def admin_stock_menu(event):
@@ -1100,16 +1086,15 @@ async def admin_stock_menu(event):
         edit = False
 
     counts = stock_count()
-    text = "📦 <b>СКЛАД АККАУНТОВ</b>\n\n"
-
+    text = "📦 <b>СКЛАД</b>\n\n"
     if counts:
         total = sum(counts.values())
-        text += f"<b>Всего в наличии:</b> {total}\n\n"
+        text += f"<b>Всего:</b> {total}\n\n"
         for c, n in sorted(counts.items(), key=lambda x: -x[1]):
             if n > 0:
-                text += f"• {c.upper()}: <b>{n}</b> шт.\n"
+                text += f"• {c.upper()}: <b>{n}</b>\n"
     else:
-        text += "<i>Склад пуст</i>\n"
+        text += "<i>Пусто</i>\n"
 
     kb = admin_stock_menu_keyboard()
     if edit:
@@ -1125,7 +1110,8 @@ async def admin_stock_menu(event):
 async def admin_upload_session_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
-        "📁 Отправьте файл <code>.session</code> для загрузки на склад.",
+        "📁 Отправьте файл <code>.session</code>.\n\n"
+        "Бот <b>сам</b> определит страну и номер по коду телефона.",
         parse_mode="HTML"
     )
     await state.set_state(AdminStockStates.waiting_for_session)
@@ -1135,43 +1121,53 @@ async def admin_upload_session_start(callback: types.CallbackQuery, state: FSMCo
 async def admin_receive_session(message: types.Message, state: FSMContext):
     doc = message.document
     if not doc.file_name.endswith(".session"):
-        await message.answer("❌ Нужен файл .session")
+        await message.answer("❌ Нужен .session")
         return
 
     temp_path = os.path.join(TEMP_DIR, doc.file_name)
     await bot.download(doc, temp_path)
 
-    await state.update_data(session_temp_path=temp_path,
-                            session_name=doc.file_name.replace(".session", ""))
+    status_msg = await message.answer("🔍 Анализирую сессию...")
+    info = await analyze_session(temp_path)
 
-    kb = InlineKeyboardBuilder()
-    seen = set()
-    for cat_key, cat_data in CATEGORIES.items():
-        for product_name, pdata in cat_data["products"].items():
-            code = pdata.get("code", "")
-            if code and code not in seen:
-                seen.add(code)
-                kb.button(text=product_name, callback_data=f"stock_country_{code}")
-    kb.button(text="❌ Отмена", callback_data="admin_stock_cancel")
-    kb.adjust(2)
+    if not info.get("valid"):
+        await status_msg.edit_text(
+            f"❌ <b>Сессия невалидна</b>\n\n"
+            f"Причина: <code>{info.get('error', 'unknown')}</code>",
+            parse_mode="HTML"
+        )
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+        await state.clear()
+        return
 
-    await message.answer("🌍 Выберите страну для аккаунта:", reply_markup=kb.as_markup())
-    await state.set_state(AdminStockStates.waiting_for_country)
+    phone = info["phone"]
+    country_code, country_name = detect_country(phone)
 
+    await state.update_data(
+        session_temp_path=temp_path,
+        session_name=doc.file_name.replace(".session", ""),
+        detected_phone=phone,
+        detected_country=country_code,
+        detected_country_name=country_name,
+        detected_user_id=info["user_id"],
+        detected_first_name=info.get("first_name"),
+        detected_username=info.get("username"),
+        detected_premium=info.get("premium", False),
+    )
 
-@dp.callback_query(AdminStockStates.waiting_for_country, F.data.startswith("stock_country_"))
-async def admin_choose_country(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    country = callback.data.replace("stock_country_", "")
-    await state.update_data(stock_country=country)
-    await callback.message.edit_text("📱 Введите номер телефона (в формате +71234567890):")
-    await state.set_state(AdminStockStates.waiting_for_phone)
-
-
-@dp.message(AdminStockStates.waiting_for_phone, F.text)
-async def admin_receive_phone(message: types.Message, state: FSMContext):
-    await state.update_data(stock_phone=message.text.strip())
-    await message.answer("💰 Введите цену в гривнах (например, 150):")
+    await status_msg.edit_text(
+        f"✅ <b>Сессия валидна!</b>\n\n"
+        f"🌍 Страна: <b>{country_name}</b>\n"
+        f"📱 Номер: <code>{phone}</code>\n"
+        f"👤 Имя: {info.get('first_name', '—')}\n"
+        f"🆔 ID: <code>{info['user_id']}</code>\n"
+        f"⭐ Premium: {'Да' if info.get('premium') else 'Нет'}\n\n"
+        f"💰 Введите цену в гривнах:",
+        parse_mode="HTML"
+    )
     await state.set_state(AdminStockStates.waiting_for_price_uah)
 
 
@@ -1183,49 +1179,62 @@ async def admin_receive_price_uah(message: types.Message, state: FSMContext):
         await message.answer("❌ Введите число")
         return
     await state.update_data(stock_price_uah=price)
-    await message.answer("⭐ Введите цену в звёздах (например, 200):")
+    await message.answer("⭐ Введите цену в звёздах:")
     await state.set_state(AdminStockStates.waiting_for_price_stars)
 
 
 @dp.message(AdminStockStates.waiting_for_price_stars, F.text)
 async def admin_receive_price_stars(message: types.Message, state: FSMContext):
     try:
-        price = int(message.text)
+        stars = int(message.text)
     except:
         await message.answer("❌ Введите целое число")
         return
 
     data = await state.get_data()
+    country = data["detected_country"]
+    phone = data["detected_phone"]
+    name = data["session_name"]
+    temp = data["session_temp_path"]
+
     try:
-        meta = add_account(
-            session_src=data["session_temp_path"],
-            country=data["stock_country"],
-            phone=data["stock_phone"],
-            price_uah=data["stock_price_uah"],
-            price_stars=price,
-        )
+        os.makedirs(country_dir(country), exist_ok=True)
+        shutil.copy(temp, session_path(country, name))
+        shutil.copy(temp, watcher_path(country, name))
+
+        meta = {
+            "country": country,
+            "session_name": name,
+            "phone": phone,
+            "user_id": data["detected_user_id"],
+            "first_name": data.get("detected_first_name"),
+            "username": data.get("detected_username"),
+            "premium": data.get("detected_premium", False),
+            "price_uah": data["stock_price_uah"],
+            "price_stars": stars,
+            "status": "available",
+            "added_at": datetime.now().isoformat(),
+            "sold_at": None,
+            "sold_to": None,
+        }
+        save_meta(country, name, meta)
+
         try:
-            os.remove(data["session_temp_path"])
+            os.remove(temp)
         except:
             pass
+
         await message.answer(
-            f"✅ <b>Аккаунт на складе!</b>\n\n"
-            f"🌍 {meta['country'].upper()}\n"
-            f"📱 {meta['phone']}\n"
-            f"💰 {meta['price_uah']}₴ / {meta['price_stars']}⭐",
+            f"✅ <b>Аккаунт добавлен!</b>\n\n"
+            f"🌍 {data['detected_country_name']}\n"
+            f"📱 {phone}\n"
+            f"💰 {data['stock_price_uah']}₴ / {stars}⭐",
             reply_markup=get_admin_reply_keyboard(),
             parse_mode="HTML"
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
     await state.clear()
-
-
-@dp.callback_query(F.data == "admin_stock_cancel")
-async def admin_stock_cancel(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.clear()
-    await callback.message.edit_text("❌ Отменено")
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_list_accounts")
@@ -1241,36 +1250,33 @@ async def admin_list_accounts(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
-# ==================== АДМИН: СТАТИСТИКА И ЗАКАЗЫ ====================
+# ==================== АДМИН: СТАТИСТИКА / ЗАКАЗЫ ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📊 Статистика")
 async def admin_statistics(message: types.Message):
     orders = load_orders()
     users = load_users()
     status_counts = {}
-    total_revenue_uah = 0
-    total_revenue_stars = 0
+    rev_uah = 0
+    rev_stars = 0
 
     for order in orders.values():
         s = order["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
         if s == "completed" and not isinstance(order.get("total", 0), str):
             if order.get("payment_method") == "uah":
-                total_revenue_uah += order.get("total", 0)
+                rev_uah += order.get("total", 0)
             elif order.get("payment_method") == "stars":
-                total_revenue_stars += order.get("total", 0)
+                rev_stars += order.get("total", 0)
 
     counts = stock_count()
-    text = (
-        f"📊 СТАТИСТИКА\n"
-        f"👤 Всего пользователей: {len(users)}\n"
-        f"📦 Всего заказов: {len(orders)}\n"
-        f"✅ Выполнено: {status_counts.get('completed', 0)}\n"
-        f"⏳ Ожидают: {status_counts.get('awaiting_payment', 0)}\n"
-        f"❌ Отклонено: {status_counts.get('rejected', 0)}\n"
-        f"💰 Гривны: {total_revenue_uah} ₴\n"
-        f"⭐ Звёзды: {total_revenue_stars} ⭐\n"
-        f"📦 Склад: {sum(counts.values())} акк."
-    )
+    text = (f"📊 СТАТИСТИКА\n"
+            f"👤 Пользователей: {len(users)}\n"
+            f"📦 Заказов: {len(orders)}\n"
+            f"✅ Выполнено: {status_counts.get('completed', 0)}\n"
+            f"⏳ Ожидают: {status_counts.get('awaiting_payment', 0)}\n"
+            f"💰 UAH: {rev_uah}\n"
+            f"⭐ Stars: {rev_stars}\n"
+            f"📦 Склад: {sum(counts.values())}")
     await message.answer(text, reply_markup=get_admin_reply_keyboard())
 
 
@@ -1313,9 +1319,9 @@ async def show_admin_orders_page(target, page, status_filter=None, edit=False):
     total_pages = (len(order_list) + per_page - 1) // per_page
     page = max(0, min(page, total_pages - 1))
 
-    text = f"📋 ЗАКАЗЫ (стр. {page + 1}/{total_pages})\n"
+    text = f"📋 ЗАКАЗЫ ({page + 1}/{total_pages})\n"
     for oid, order in order_list[page * per_page:(page + 1) * per_page]:
-        e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
+        e, _ = STATUS_CONFIG.get(order["status"], ("❓", ""))
         s = method_symbol(order.get("payment_method", "uah"))
         short = order.get("short_id", oid[:8])
         created = datetime.fromisoformat(order["created_at"]).strftime("%d.%m %H:%M")
@@ -1334,17 +1340,16 @@ async def show_admin_orders_page(target, page, status_filter=None, edit=False):
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_order_detail_"))
 async def admin_order_detail(callback: types.CallbackQuery):
     await callback.answer()
-    order_id = callback.data.replace("admin_order_detail_", "")
+    oid = callback.data.replace("admin_order_detail_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, order_id)
+    real_key = find_order_key(orders, oid)
     if not real_key:
         await callback.answer("❌ Не найден", show_alert=True)
         return
     order = orders[real_key]
-    oid = real_key
     e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
     s = method_symbol(order.get("payment_method", "uah"))
-    short = order.get("short_id", oid[:8])
+    short = order.get("short_id", real_key[:8])
     total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
 
     text = (
@@ -1360,9 +1365,17 @@ async def admin_order_detail(callback: types.CallbackQuery):
         text += f"📱 {order['phone']}\n"
 
     try:
-        await callback.message.edit_text(text, reply_markup=admin_order_card_keyboard(oid, order["status"], order["user_id"]), parse_mode="HTML")
+        await callback.message.edit_text(
+            text,
+            reply_markup=admin_order_card_keyboard(real_key, order["status"], order["user_id"]),
+            parse_mode="HTML"
+        )
     except:
-        await callback.message.answer(text, reply_markup=admin_order_card_keyboard(oid, order["status"], order["user_id"]), parse_mode="HTML")
+        await callback.message.answer(
+            text,
+            reply_markup=admin_order_card_keyboard(real_key, order["status"], order["user_id"]),
+            parse_mode="HTML"
+        )
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_back_to_list")
@@ -1397,7 +1410,7 @@ async def save_requisite(message: types.Message, state: FSMContext):
     req = load_requisites()
     req[method] = message.text
     save_requisites(req)
-    await message.answer(f"✅ Реквизиты обновлены!", reply_markup=get_admin_reply_keyboard())
+    await message.answer(f"✅ Обновлено!", reply_markup=get_admin_reply_keyboard())
     await state.clear()
 
 
@@ -1406,9 +1419,8 @@ async def save_requisite(message: types.Message, state: FSMContext):
 async def admin_broadcast(message: types.Message, state: FSMContext):
     users = load_users()
     if not users:
-        await message.answer("❌ Нет пользователей")
-        return
-    await message.answer(f"📢 Отправьте сообщение для рассылки на {len(users)} пользователей. /cancel для отмены")
+        return await message.answer("❌ Нет пользователей")
+    await message.answer(f"📢 Отправьте сообщение для рассылки на {len(users)} юзеров. /cancel для отмены")
     await state.set_state(AdminStates.waiting_for_broadcast)
 
 
@@ -1420,7 +1432,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         return
     users = load_users()
     success = failed = 0
-    sm = await message.answer(f"⏳ Рассылка...")
+    sm = await message.answer("⏳ Рассылка...")
     for uid in users.keys():
         try:
             await bot.copy_message(int(uid), message.chat.id, message.message_id)
@@ -1445,23 +1457,22 @@ async def cancel_handler(message: types.Message, state: FSMContext):
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_confirm_payment_"))
 async def admin_confirm_payment(callback: types.CallbackQuery):
     await callback.answer()
-    order_id = callback.data.replace("admin_confirm_payment_", "")
+    oid = callback.data.replace("admin_confirm_payment_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, order_id)
-    if not real_key:
-        await callback.answer("❌ Не найден", show_alert=True)
+    rk = find_order_key(orders, oid)
+    if not rk:
         return
-    order = orders[real_key]
+    order = orders[rk]
     order["status"] = "paid"
     order["paid_at"] = datetime.now().isoformat()
     save_orders(orders)
     try:
-        await bot.send_message(order["user_id"], f"✅ Оплата по заказу {order.get('short_id', real_key)} подтверждена.")
+        await bot.send_message(order["user_id"], f"✅ Оплата по {order.get('short_id', rk)} подтверждена.")
     except:
         pass
     await callback.message.edit_text(
         callback.message.text + f"\n✅ <b>ОПЛАЧЕНО</b>",
-        reply_markup=admin_order_card_keyboard(real_key, "paid", order["user_id"]),
+        reply_markup=admin_order_card_keyboard(rk, "paid", order["user_id"]),
         parse_mode="HTML"
     )
 
@@ -1469,12 +1480,12 @@ async def admin_confirm_payment(callback: types.CallbackQuery):
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_reject_"))
 async def admin_reject_order(callback: types.CallbackQuery):
     await callback.answer()
-    order_id = callback.data.replace("admin_reject_", "")
+    oid = callback.data.replace("admin_reject_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, order_id)
-    if not real_key:
+    rk = find_order_key(orders, oid)
+    if not rk:
         return
-    order = orders[real_key]
+    order = orders[rk]
     order["status"] = "rejected"
     save_orders(orders)
 
@@ -1482,12 +1493,12 @@ async def admin_reject_order(callback: types.CallbackQuery):
         release_account(order["country_code"], order["session_name"])
 
     try:
-        await bot.send_message(order["user_id"], f"❌ Заказ {order.get('short_id', real_key)} отклонён")
+        await bot.send_message(order["user_id"], f"❌ Заказ {order.get('short_id', rk)} отклонён")
     except:
         pass
     await callback.message.edit_text(
         callback.message.text + f"\n❌ <b>ОТКЛОНЁН</b>",
-        reply_markup=admin_order_card_keyboard(real_key, "rejected", order["user_id"]),
+        reply_markup=admin_order_card_keyboard(rk, "rejected", order["user_id"]),
         parse_mode="HTML"
     )
 
@@ -1495,37 +1506,38 @@ async def admin_reject_order(callback: types.CallbackQuery):
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_deliver_"))
 async def admin_deliver_account(callback: types.CallbackQuery):
     await callback.answer()
-    order_id = callback.data.replace("admin_deliver_", "")
+    oid = callback.data.replace("admin_deliver_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, order_id)
-    if not real_key:
+    rk = find_order_key(orders, oid)
+    if not rk:
         return
-    order = orders[real_key]
-
+    order = orders[rk]
     if not order.get("session_name") or not order.get("country_code"):
-        await callback.answer("❌ Заказ без привязки к складу", show_alert=True)
+        await callback.answer("❌ Заказ без склада", show_alert=True)
         return
-
-    await deliver_to_user(order, real_key)
+    await deliver_to_user(order, rk)
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_refund_"))
 async def admin_refund(callback: types.CallbackQuery):
     await callback.answer()
-    order_id = callback.data.replace("admin_refund_", "")
+    oid = callback.data.replace("admin_refund_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, order_id)
-    if not real_key:
+    rk = find_order_key(orders, oid)
+    if not rk:
         return
-    order = orders[real_key]
+    order = orders[rk]
     order["status"] = "refunded"
     save_orders(orders)
     try:
-        await bot.send_message(order["user_id"], f"💰 Возврат по {order.get('short_id', real_key)} оформлен.")
+        await bot.send_message(order["user_id"], f"💰 Возврат по {order.get('short_id', rk)} оформлен.")
     except:
         pass
-    await callback.message.edit_text(callback.message.text + "\n💰 <b>ВОЗВРАТ</b>",
-        reply_markup=admin_order_card_keyboard(real_key, "refunded", order["user_id"]), parse_mode="HTML")
+    await callback.message.edit_text(
+        callback.message.text + "\n💰 <b>ВОЗВРАТ</b>",
+        reply_markup=admin_order_card_keyboard(rk, "refunded", order["user_id"]),
+        parse_mode="HTML"
+    )
 
 
 async def deliver_to_user(order: dict, order_key: str):
@@ -1538,7 +1550,7 @@ async def deliver_to_user(order: dict, order_key: str):
 
     if not os.path.exists(sess_file):
         try:
-            await bot.send_message(user_id, "❌ Ошибка: файл сессии не найден. Напишите в поддержку @MaskYoY")
+            await bot.send_message(user_id, "❌ Файл сессии не найден. @MaskYoY")
         except:
             pass
         return
@@ -1555,7 +1567,7 @@ async def deliver_to_user(order: dict, order_key: str):
                 f"1. Открой Telegram Desktop\n"
                 f"2. Используй .session в Telethon\n"
                 f"3. Когда Telegram запросит код — нажми кнопку ниже\n\n"
-                f"<b>Код придёт автоматически в этот чат!</b>"
+                f"<b>Код придёт автоматически сюда!</b>"
             ),
             parse_mode="HTML",
             reply_markup=InlineKeyboardBuilder().button(
@@ -1566,7 +1578,9 @@ async def deliver_to_user(order: dict, order_key: str):
         mark_sold(country_code, session_name, user_id)
         order["status"] = "completed"
         order["completed_at"] = datetime.now().isoformat()
-        save_orders(load_orders() | {order_key: order})
+        all_orders = load_orders()
+        all_orders[order_key] = order
+        save_orders(all_orders)
         asyncio.create_task(start_code_watcher(country_code, session_name, user_id))
     except Exception as e:
         logger.error(f"Deliver error: {e}")
@@ -1578,15 +1592,15 @@ async def start_review(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     oid = callback.data.replace("leave_review_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, oid)
-    if not real_key:
+    rk = find_order_key(orders, oid)
+    if not rk:
         return
-    order = orders[real_key]
+    order = orders[rk]
     if order["status"] != "completed":
-        await callback.answer("❌ Нельзя оставить отзыв", show_alert=True)
+        await callback.answer("❌ Нельзя", show_alert=True)
         return
-    await state.update_data(review_order_id=real_key)
-    await callback.message.edit_text(f"Оцените заказ {order.get('short_id', real_key)}:", reply_markup=stars_keyboard())
+    await state.update_data(review_order_id=rk)
+    await callback.message.edit_text(f"Оцените {order.get('short_id', rk)}:", reply_markup=stars_keyboard())
     await state.set_state(ReviewStates.waiting_for_stars)
 
 
@@ -1596,7 +1610,7 @@ async def process_stars(callback: types.CallbackQuery, state: FSMContext):
     rating = int(callback.data.split("_")[1])
     await state.update_data(stars=rating)
     await callback.message.edit_text(
-        f"{'⭐' * rating}\n📸 Отправьте фото или пропустите:",
+        f"{'⭐' * rating}\n📸 Фото или пропустить:",
         reply_markup=review_photo_skip_keyboard()
     )
     await state.set_state(ReviewStates.waiting_for_photo_or_skip)
@@ -1606,14 +1620,14 @@ async def process_stars(callback: types.CallbackQuery, state: FSMContext):
 async def skip_photo(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.update_data(photo=None)
-    await callback.message.edit_text("✏️ Напишите текст отзыва:")
+    await callback.message.edit_text("✏️ Текст отзыва:")
     await state.set_state(ReviewStates.waiting_for_text)
 
 
 @dp.message(ReviewStates.waiting_for_photo_or_skip, F.photo)
 async def process_photo(message: types.Message, state: FSMContext):
     await state.update_data(photo=message.photo[-1].file_id)
-    await message.answer("✏️ Напишите текст отзыва:")
+    await message.answer("✏️ Текст отзыва:")
     await state.set_state(ReviewStates.waiting_for_text)
 
 
@@ -1647,8 +1661,7 @@ async def process_review_text(message: types.Message, state: FSMContext):
             await bot.send_photo(ADMIN_ID, data["photo"], caption=caption, reply_markup=moderation_keyboard(rid))
         else:
             await bot.send_message(ADMIN_ID, caption, reply_markup=moderation_keyboard(rid))
-        await message.answer("🙏 Спасибо за отзыв! Он будет опубликован после проверки.",
-                             reply_markup=get_main_reply_keyboard())
+        await message.answer("🙏 Спасибо!", reply_markup=get_main_reply_keyboard())
     except Exception as e:
         logger.error(f"Review error: {e}")
     await state.clear()
@@ -1662,7 +1675,7 @@ async def approve_review(callback: types.CallbackQuery):
     review = reviews.get(rid)
     if not review:
         return
-    text = (f"⭐️ НОВЫЙ ОТЗЫВ\nПокупатель: @{review.get('username', 'Покупатель')}\n"
+    text = (f"⭐️ НОВЫЙ ОТЗЫВ\nПокупатель: @{review.get('username', '—')}\n"
             f"Оценка: {'⭐️' * review['stars']}\nОтзыв: {review['text']}\n"
             f"Купить: @MaskYoY\nКанал: @owerpass_store")
     try:
@@ -1670,7 +1683,7 @@ async def approve_review(callback: types.CallbackQuery):
             await bot.send_photo(CHANNEL_ID, review["photo"], caption=text)
         else:
             await bot.send_message(CHANNEL_ID, text)
-        await bot.send_message(review["user_id"], "🎉 Ваш отзыв опубликован!")
+        await bot.send_message(review["user_id"], "🎉 Отзыв опубликован!")
         review["status"] = "approved"
         save_reviews(reviews)
         if callback.message.caption:
@@ -1716,17 +1729,17 @@ async def show_user_orders(event):
         kb = main_menu_keyboard()
     else:
         text = f"📋 ВАШИ ЗАКАЗЫ ({len(user_orders)})\n"
-        kb_builder = InlineKeyboardBuilder()
+        b = InlineKeyboardBuilder()
         for oid, order in sorted(user_orders.items(), reverse=True):
-            e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
+            e, _ = STATUS_CONFIG.get(order["status"], ("❓", ""))
             s = method_symbol(order.get("payment_method", "uah"))
             short = order.get("short_id", oid[:8])
             total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
             text += f"{e} {short} | {order['product']} | {total}\n"
-            kb_builder.button(text=f"📋 {short}", callback_data=f"order_detail_{oid}")
-        kb_builder.button(text="⬅️ Меню", callback_data="main_menu")
-        kb_builder.adjust(1)
-        kb = kb_builder.as_markup()
+            b.button(text=f"📋 {short}", callback_data=f"order_detail_{oid}")
+        b.button(text="⬅️ Меню", callback_data="main_menu")
+        b.adjust(1)
+        kb = b.as_markup()
 
     try:
         await target.edit_text(text, reply_markup=kb)
@@ -1739,15 +1752,14 @@ async def show_order_detail(callback: types.CallbackQuery):
     await callback.answer()
     oid = callback.data.replace("order_detail_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, oid)
-    if not real_key:
+    rk = find_order_key(orders, oid)
+    if not rk:
         await callback.answer("❌ Не найден", show_alert=True)
         return
-    order = orders[real_key]
-    oid = real_key
+    order = orders[rk]
     e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
     s = method_symbol(order.get("payment_method", "uah"))
-    short = order.get("short_id", oid[:8])
+    short = order.get("short_id", rk[:8])
     total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
 
     text = (f"📋 ЗАКАЗ {short}\n"
@@ -1756,12 +1768,12 @@ async def show_order_detail(callback: types.CallbackQuery):
             f"Сумма: {total}\n"
             f"Статус: {e} {st}\n")
     if order.get("phone"):
-        text += f"📱 Номер: {order['phone']}\n"
+        text += f"📱 {order['phone']}\n"
 
     if order["status"] == "completed":
-        kb = user_order_actions_keyboard(oid)
+        kb = user_order_actions_keyboard(rk)
     elif order["status"] == "awaiting_payment":
-        kb = awaiting_payment_keyboard(oid)
+        kb = awaiting_payment_keyboard(rk)
     else:
         b = InlineKeyboardBuilder()
         b.button(text="📋 Мои заказы", callback_data="my_orders")
@@ -1789,7 +1801,7 @@ async def show_my_accounts(event):
     accounts = get_user_accounts(user_id)
 
     if not accounts:
-        text = "📦 У вас пока нет купленных аккаунтов"
+        text = "📦 У вас пока нет аккаунтов"
         kb = main_menu_keyboard()
     else:
         text = f"📦 ВАШИ АККАУНТЫ ({len(accounts)})\n\n"
@@ -1812,17 +1824,11 @@ async def show_my_accounts(event):
 async def request_code_for_account(callback: types.CallbackQuery):
     await callback.answer()
     data = callback.data.replace("request_code_for_", "")
-
     if "_" not in data:
-        await callback.answer("❌ Ошибка", show_alert=True)
         return
-
     country, session_name = data.split("_", 1)
-
     await callback.message.answer(
-        "🔑 <b>Ожидайте код...</b>\n\n"
-        "Сейчас войди в Telegram с номером аккаунта.\n"
-        "Когда придёт код — я автоматически перешлю его сюда.",
+        "🔑 <b>Ожидайте код...</b>\n\nВойдите в Telegram, код придёт сюда автоматически.",
         parse_mode="HTML"
     )
     asyncio.create_task(start_code_watcher(country, session_name, callback.from_user.id))
@@ -1835,8 +1841,8 @@ async def user_replace(callback: types.CallbackQuery):
     orders = load_orders()
     rk = find_order_key(orders, oid)
     if rk:
-        await bot.send_message(ADMIN_ID, f"🔄 Запрос замены: {orders[rk].get('short_id', rk)} от @{callback.from_user.username}")
-    await callback.message.answer("🔄 Запрос отправлен продавцу. @MaskYoY")
+        await bot.send_message(ADMIN_ID, f"🔄 Замена: {orders[rk].get('short_id', rk)} от @{callback.from_user.username}")
+    await callback.message.answer("🔄 Запрос отправлен. @MaskYoY")
 
 
 @dp.callback_query(F.data.startswith("user_refund_"))
@@ -1846,8 +1852,8 @@ async def user_refund(callback: types.CallbackQuery):
     orders = load_orders()
     rk = find_order_key(orders, oid)
     if rk:
-        await bot.send_message(ADMIN_ID, f"💰 Запрос возврата: {orders[rk].get('short_id', rk)} от @{callback.from_user.username}")
-    await callback.message.answer("💰 Запрос возврата отправлен. @MaskYoY")
+        await bot.send_message(ADMIN_ID, f"💰 Возврат: {orders[rk].get('short_id', rk)} от @{callback.from_user.username}")
+    await callback.message.answer("💰 Запрос отправлен. @MaskYoY")
 
 
 # ==================== ПОДДЕРЖКА ====================
@@ -1862,13 +1868,13 @@ async def start_support(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(support_order_id=oid)
     await state.set_state(SupportStates.chatting)
     close_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Закрыть чат")]], resize_keyboard=True)
-    await callback.message.answer("🆘 Напишите сообщение продавцу. Кнопка ниже — закрыть чат.", reply_markup=close_kb)
+    await callback.message.answer("🆘 Напишите сообщение продавцу.", reply_markup=close_kb)
 
 
 @dp.message(SupportStates.chatting, F.text == "❌ Закрыть чат")
 async def close_support(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Чат закрыт", reply_markup=get_main_reply_keyboard())
+    await message.answer("❌ Закрыто", reply_markup=get_main_reply_keyboard())
 
 
 @dp.message(SupportStates.chatting)
@@ -1878,13 +1884,12 @@ async def relay_to_admin(message: types.Message, state: FSMContext):
     orders = load_orders()
     rk = find_order_key(orders, oid)
     short = orders[rk].get("short_id", oid) if rk else oid
-
-    await bot.send_message(ADMIN_ID, f"🆘 ОТ @{message.from_user.username} | Заказ {short}")
+    await bot.send_message(ADMIN_ID, f"🆘 @{message.from_user.username} | Заказ {short}")
     fwd = await bot.copy_message(ADMIN_ID, message.chat.id, message.message_id)
     relay = load_relay()
     relay[str(fwd.message_id)] = message.from_user.id
     save_relay(relay)
-    await message.answer("✅ Отправлено продавцу")
+    await message.answer("✅ Отправлено")
 
 
 @dp.message(F.from_user.id == ADMIN_ID, F.reply_to_message)
@@ -1908,13 +1913,9 @@ async def request_code_cb(callback: types.CallbackQuery):
     orders = load_orders()
     rk = find_order_key(orders, oid)
     if not rk:
-        await callback.answer("❌ Не найден", show_alert=True)
         return
     order = orders[rk]
-    await callback.message.answer(
-        "🔑 <b>Готово!</b>\n\nВходи в Telegram — код автоматически придёт сюда.",
-        parse_mode="HTML"
-    )
+    await callback.message.answer("🔑 <b>Ожидайте код...</b>", parse_mode="HTML")
     asyncio.create_task(start_code_watcher(order["country_code"], order["session_name"], callback.from_user.id))
 
 
@@ -1959,8 +1960,6 @@ async def show_profile(target, user_obj=None):
     if user_obj is None:
         user_obj = target.from_user
     user_id = user_obj.id
-
-    users = load_users()
     level = get_user_level(user_id)
     orders = load_orders()
     completed = [o for o in orders.values() if o["user_id"] == user_id and o["status"] == "completed"]
@@ -1972,11 +1971,11 @@ async def show_profile(target, user_obj=None):
     text = (f"👤 <b>Профиль</b>\n"
             f"🆔 <code>{user_id}</code>\n"
             f"👤 {user_obj.full_name}\n"
-            f"⭐ Уровень: {level['emoji']} {level['name']} (-{level['discount']}%)\n"
-            f"💵 Потрачено: {total_spent:.2f} грн\n"
+            f"⭐ {level['emoji']} {level['name']} (-{level['discount']}%)\n"
+            f"💵 Потрачено: {total_spent:.2f}₴\n"
             f"📦 Покупок: {len(completed)}\n"
             f"👥 Рефералов: {total_refs}\n"
-            f"💸 Бонусы: {rdata.get('total_earned', 0):.2f} грн")
+            f"💸 Бонусы: {rdata.get('total_earned', 0):.2f}₴")
 
     try:
         await target.edit_text(text, reply_markup=profile_keyboard(), parse_mode="HTML")
@@ -2013,7 +2012,7 @@ async def referral_menu(event):
     text = (f"👥 <b>Рефералы</b>\n"
             f"🎁 Бонус: {bonus}%\n"
             f"👤 Приглашено: {len(rdata['referrals_list'])}\n"
-            f"💸 Заработано: {rdata['total_earned']:.2f} грн\n\n"
+            f"💸 Заработано: {rdata['total_earned']:.2f}₴\n\n"
             f"🔗 <code>{link}</code>")
 
     kb = referral_menu_keyboard()
@@ -2036,9 +2035,8 @@ async def referral_stats(callback: types.CallbackQuery):
         for r in reflist[-10:]:
             st = "✅" if r.get("first_purchase_done") else "⏳"
             text += f"{st} @{r.get('username', '—')}\n"
-    b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад", callback_data="referral_menu")
-    await callback.message.edit_text(text, reply_markup=b.as_markup(), parse_mode="HTML")
+    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="referral_menu").as_markup()
+    await callback.message.edit_text(text, reply_markup=b, parse_mode="HTML")
 
 
 @dp.message(F.from_user.id != ADMIN_ID, F.text == "🎟 Промокод")
@@ -2049,14 +2047,11 @@ async def promo_menu(event, state: FSMContext = None):
         target = event.message
     else:
         target = event
-
-    b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад", callback_data="main_menu")
-    text = "🎟 <b>Введите промокод</b>"
+    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="main_menu").as_markup()
     try:
-        await target.edit_text(text, reply_markup=b.as_markup(), parse_mode="HTML")
+        await target.edit_text("🎟 <b>Введите промокод</b>", reply_markup=b, parse_mode="HTML")
     except:
-        await target.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
+        await target.answer("🎟 <b>Введите промокод</b>", reply_markup=b, parse_mode="HTML")
     if state:
         await state.set_state(PromoStates.waiting_for_promo_code)
 
@@ -2151,11 +2146,9 @@ async def product_selected(callback: types.CallbackQuery, state: FSMContext):
     code = parts[2]
 
     product_name = None
-    price_data = None
     for pname, pdata in CATEGORIES[category]["products"].items():
         if pdata.get("code") == code:
             product_name = pname
-            price_data = pdata
             break
 
     if not product_name:
@@ -2177,41 +2170,33 @@ async def product_selected(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(OrderStates.waiting_for_quantity)
 
 
-async def ask_payment_method(target, state: FSMContext):
+@dp.callback_query(OrderStates.waiting_for_quantity, F.data.startswith("qty_"))
+async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    qty = int(callback.data.split("_")[1])
+    await state.update_data(quantity=qty)
+
     data = await state.get_data()
-    category = data["category"]
-    product = data["product"]
-    code = data.get("code", "")
+    code = data["code"]
 
     avail = all_available(code)
     if not avail:
-        if hasattr(target, "edit_text"):
-            await target.edit_text("❌ Товар закончился", reply_markup=main_menu_keyboard())
-        else:
-            await target.answer("❌ Товар закончился", reply_markup=main_menu_keyboard())
+        await callback.message.edit_text("❌ Товар закончился", reply_markup=main_menu_keyboard())
         await state.clear()
         return
 
     acc = avail[0]
     await state.update_data(price_uah=acc["price_uah"], price_stars=acc["price_stars"])
 
-    text = (f"📦 {product}\n"
+    text = (f"📦 {data['product']}\n"
             f"💰 {acc['price_uah']}₴\n"
             f"⭐ {acc['price_stars']}\n\n"
-            f"Выберите способ оплаты:")
+            f"Способ оплаты:")
 
     try:
-        await target.edit_text(text, reply_markup=payment_method_keyboard())
+        await callback.message.edit_text(text, reply_markup=payment_method_keyboard())
     except:
-        await target.answer(text, reply_markup=payment_method_keyboard())
-
-
-@dp.callback_query(OrderStates.waiting_for_quantity, F.data.startswith("qty_"))
-async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    qty = int(callback.data.split("_")[1])
-    await state.update_data(quantity=qty)
-    await ask_payment_method(callback.message, state)
+        await callback.message.answer(text, reply_markup=payment_method_keyboard())
     await state.set_state(OrderStates.waiting_for_payment_method)
 
 
@@ -2222,20 +2207,16 @@ async def process_payment_method(callback: types.CallbackQuery, state: FSMContex
     await state.update_data(payment_method=method)
 
     data = await state.get_data()
-    product = data["product"]
-    code = data["code"]
     price_uah = data.get("price_uah")
     price_stars = data.get("price_stars")
 
     if method == "stars":
-        total = price_stars
-        total_text = f"{total}⭐"
+        total_text = f"{price_stars}⭐"
     else:
-        total = price_uah
-        total_text = f"{total}₴"
+        total_text = f"{price_uah}₴"
 
     text = (f"📋 Подтверждение\n"
-            f"Товар: {product}\n"
+            f"Товар: {data['product']}\n"
             f"Оплата: {method_label(method)}\n"
             f"Сумма: {total_text}\n\n"
             f"Подтвердить?")
@@ -2294,15 +2275,12 @@ async def confirm_order(callback: types.CallbackQuery, state: FSMContext):
                 start_parameter=f"buy_{short_id}",
             )
             await callback.message.edit_text(
-                f"💳 <b>Счёт отправлен!</b>\n\n"
-                f"Заказ: {short_id}\n"
-                f"Сумма: {acc['price_stars']}⭐\n\n"
-                f"Нажмите «Оплатить» в сообщении выше.",
+                f"💳 <b>Счёт отправлен!</b>\n\nЗаказ: {short_id}\nСумма: {acc['price_stars']}⭐",
                 parse_mode="HTML"
             )
         except Exception as e:
             logger.error(f"Invoice error: {e}")
-            await callback.message.edit_text(f"❌ Ошибка оплаты: {e}")
+            await callback.message.edit_text(f"❌ Ошибка: {e}")
     else:
         requisites = get_requisites("uah")
         await callback.message.edit_text(
@@ -2340,28 +2318,6 @@ async def successful_payment(message: types.Message):
     await deliver_to_user(order, short_id)
 
 
-# ==================== ПРОМОКОД В CHECKOUT ====================
-@dp.callback_query(OrderStates.waiting_for_confirmation, F.data == "apply_promo_at_checkout")
-async def promo_checkout(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_text("🎟 Введите промокод:")
-    await state.set_state(CheckoutPromoStates.waiting_for_promo_code)
-
-
-@dp.message(CheckoutPromoStates.waiting_for_promo_code, F.text)
-async def process_checkout_promo(message: types.Message, state: FSMContext):
-    code = message.text.strip().upper()
-    promos = load_promo_codes()
-    p = promos.get(code)
-    if not p or not p.get("is_active"):
-        await message.answer("❌ Не найден")
-        await state.clear()
-        return
-    await state.update_data(promo_code=code)
-    await message.answer(f"✅ Промокод {code} применён!")
-    await state.clear()
-
-
 # ==================== АДМИН: ПАНЕЛЬ ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📈 Панель управления")
 async def admin_dashboard_cmd(message: types.Message):
@@ -2384,10 +2340,8 @@ async def show_dashboard(target, edit=False):
     orders = load_orders()
     users = load_users()
     counts = stock_count()
-
     now = datetime.now()
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
     rev_today = 0
     total_rev = 0
     completed = 0
@@ -2407,8 +2361,8 @@ async def show_dashboard(target, edit=False):
                     if u.get("first_seen") and datetime.fromisoformat(u["first_seen"]) >= today)
 
     text = (f"📊 <b>ПАНЕЛЬ</b>\n"
-            f"💰 Сегодня: {rev_today:.2f} грн\n"
-            f"💰 Общий оборот: {total_rev:.2f} грн\n"
+            f"💰 Сегодня: {rev_today:.2f}₴\n"
+            f"💰 Всего: {total_rev:.2f}₴\n"
             f"👥 Новых: {new_today}\n"
             f"📦 Выполнено: {completed}/{len(orders)}\n"
             f"📦 Склад: {sum(counts.values())} акк.\n"
@@ -2424,7 +2378,7 @@ async def show_dashboard(target, edit=False):
         await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-# ==================== АДМИН: ПРОМОКОДЫ, АКЦИИ, УРОВНИ, РАССЫЛКИ, АНАЛИТИКА ====================
+# ==================== АДМИН: ПРОМОКОДЫ / УРОВНИ / РАССЫЛКИ / АНАЛИТИКА ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "🎟 Промокоды")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_promo_dashboard")
 async def admin_promo_menu(event):
@@ -2446,26 +2400,6 @@ async def admin_promo_menu(event):
         await target.answer(text, reply_markup=kb)
 
 
-@dp.message(F.from_user.id == ADMIN_ID, F.text == "🔥 Акции")
-@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_promotions_dashboard")
-async def admin_promo_actions(event):
-    if isinstance(event, types.CallbackQuery):
-        await event.answer()
-        target = event.message
-        edit = True
-    else:
-        target = event
-        edit = False
-    kb = admin_promotions_keyboard()
-    if edit:
-        try:
-            await target.edit_text("🔥 Акции:", reply_markup=kb)
-        except:
-            await target.answer("🔥 Акции:", reply_markup=kb)
-    else:
-        await target.answer("🔥 Акции:", reply_markup=kb)
-
-
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "⭐ Уровни")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_levels_dashboard")
 async def admin_levels(event):
@@ -2476,7 +2410,6 @@ async def admin_levels(event):
     else:
         target = event
         edit = False
-
     levels = {
         "Бронза": ("🥉", get_setting("level_bronze_min", 0), get_setting("level_bronze_discount", 0)),
         "Серебро": ("🥈", get_setting("level_silver_min", 500), get_setting("level_silver_discount", 3)),
@@ -2497,6 +2430,72 @@ async def admin_levels(event):
         await target.answer(text, reply_markup=kb)
 
 
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_edit_level_"))
+async def admin_edit_level(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    key = callback.data.replace("admin_edit_level_", "")
+    await state.update_data(edit_level=key)
+    b = InlineKeyboardBuilder()
+    b.button(text="💵 Порог", callback_data="edit_level_min")
+    b.button(text="🎁 Скидка", callback_data="edit_level_discount")
+    b.button(text="⬅️ Назад", callback_data="admin_levels_dashboard")
+    b.adjust(1)
+    await callback.message.edit_text(
+        f"Уровень {LEVEL_KEYS.get(key, key)}:",
+        reply_markup=b.as_markup()
+    )
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "edit_level_min")
+async def edit_level_min(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.update_data(edit_field="min_spent")
+    await callback.message.edit_text("Введите новый порог:")
+    await state.set_state(AdminLevelStates.waiting_for_min_spent)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "edit_level_discount")
+async def edit_level_discount(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.update_data(edit_field="discount")
+    await callback.message.edit_text("Введите скидку %:")
+    await state.set_state(AdminLevelStates.waiting_for_discount)
+
+
+@dp.message(AdminLevelStates.waiting_for_min_spent, F.text)
+async def save_level_min(message: types.Message, state: FSMContext):
+    try:
+        v = float(message.text)
+    except:
+        await message.answer("❌ Число")
+        return
+    data = await state.get_data()
+    key = data.get("edit_level", "bronze")
+    s = load_settings()
+    s[f"level_{key}_min"] = v
+    save_settings(s)
+    await message.answer(f"✅ Порог {LEVEL_KEYS.get(key, key)}: {v}₴", reply_markup=get_admin_reply_keyboard())
+    await state.clear()
+
+
+@dp.message(AdminLevelStates.waiting_for_discount, F.text)
+async def save_level_disc(message: types.Message, state: FSMContext):
+    try:
+        v = float(message.text)
+        if not (0 <= v <= 100):
+            raise ValueError
+    except:
+        await message.answer("❌ 0-100")
+        return
+    data = await state.get_data()
+    key = data.get("edit_level", "bronze")
+    s = load_settings()
+    s[f"level_{key}_discount"] = v
+    save_settings(s)
+    await message.answer(f"✅ Скидка {LEVEL_KEYS.get(key, key)}: {v}%", reply_markup=get_admin_reply_keyboard())
+    await state.clear()
+
+
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📢 Рассылки")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_broadcasts_dashboard")
 async def admin_broadcasts(event):
@@ -2510,11 +2509,57 @@ async def admin_broadcasts(event):
     kb = admin_broadcasts_keyboard()
     if edit:
         try:
-            await target.edit_text("📢 Автоматические рассылки:", reply_markup=kb)
+            await target.edit_text("📢 Авторассылки:", reply_markup=kb)
         except:
-            await target.answer("📢 Автоматические рассылки:", reply_markup=kb)
+            await target.answer("📢 Авторассылки:", reply_markup=kb)
     else:
-        await target.answer("📢 Автоматические рассылки:", reply_markup=kb)
+        await target.answer("📢 Авторассылки:", reply_markup=kb)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_create_broadcast_template")
+async def create_bc(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    b = InlineKeyboardBuilder()
+    for d in [3, 7, 14, 30]:
+        b.button(text=f"{d} дней", callback_data=f"broadcast_days_{d}")
+    b.adjust(2)
+    await callback.message.edit_text("Через сколько дней неактивности:", reply_markup=b.as_markup())
+    await state.set_state(AdminBroadcastTemplateStates.waiting_for_days)
+
+
+@dp.callback_query(AdminBroadcastTemplateStates.waiting_for_days, F.data.startswith("broadcast_days_"))
+async def bc_days(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    d = int(callback.data.split("_")[-1])
+    await state.update_data(broadcast_days=d)
+    await callback.message.edit_text("Введите текст рассылки (HTML):")
+    await state.set_state(AdminBroadcastTemplateStates.waiting_for_text)
+
+
+@dp.message(AdminBroadcastTemplateStates.waiting_for_text, F.text)
+async def bc_text(message: types.Message, state: FSMContext):
+    await state.update_data(broadcast_text=message.text)
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Без кнопки", callback_data="broadcast_no_button")
+    await message.answer("Добавить кнопку?", reply_markup=b.as_markup())
+    await state.set_state(AdminBroadcastTemplateStates.waiting_for_button)
+
+
+@dp.callback_query(AdminBroadcastTemplateStates.waiting_for_button, F.data == "broadcast_no_button")
+async def bc_no_button(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    bcs = load_broadcasts()
+    bid = f"bc_{data['broadcast_days']}"
+    bcs[bid] = {
+        "days_inactive": data["broadcast_days"],
+        "message_text": data["broadcast_text"],
+        "button_text": None, "button_url": None,
+        "is_active": True, "created_at": datetime.now().isoformat(),
+    }
+    save_broadcasts(bcs)
+    await callback.message.edit_text(f"✅ Рассылка настроена", reply_markup=admin_broadcasts_keyboard())
+    await state.clear()
 
 
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📊 Аналитика")
@@ -2538,7 +2583,7 @@ async def admin_analytics(event):
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_by_days")
-async def analytics_days(callback: types.CallbackQuery):
+async def anal_days(callback: types.CallbackQuery):
     await callback.answer()
     orders = load_orders()
     now = datetime.now()
@@ -2561,12 +2606,12 @@ async def analytics_days(callback: types.CallbackQuery):
     for d in reversed(list(data.keys())):
         if data[d]["rev"] > 0:
             text += f"📅 {d}: {data[d]['rev']:.2f}₴ ({data[d]['n']})\n"
-    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_analytics_dashboard").as_markup()
+    b = InlineKeyboardBuilder().button(text="⬅️", callback_data="admin_analytics_dashboard").as_markup()
     await callback.message.edit_text(text, reply_markup=b)
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_by_hours")
-async def analytics_hours(callback: types.CallbackQuery):
+async def anal_hours(callback: types.CallbackQuery):
     await callback.answer()
     orders = load_orders()
     h = {i: {"rev": 0, "n": 0} for i in range(24)}
@@ -2583,12 +2628,12 @@ async def analytics_hours(callback: types.CallbackQuery):
     for i in range(24):
         if h[i]["n"] > 0:
             text += f"{i:02d}:00 — {h[i]['rev']:.2f}₴ ({h[i]['n']})\n"
-    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_analytics_dashboard").as_markup()
+    b = InlineKeyboardBuilder().button(text="⬅️", callback_data="admin_analytics_dashboard").as_markup()
     await callback.message.edit_text(text, reply_markup=b)
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_by_country")
-async def analytics_country(callback: types.CallbackQuery):
+async def anal_country(callback: types.CallbackQuery):
     await callback.answer()
     orders = load_orders()
     stats = {}
@@ -2602,7 +2647,7 @@ async def analytics_country(callback: types.CallbackQuery):
     text = "🌍 По странам:\n"
     for c, d in sorted(stats.items(), key=lambda x: -x[1]["rev"]):
         text += f"• {c.upper()}: {d['rev']:.2f}₴ ({d['n']})\n"
-    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_analytics_dashboard").as_markup()
+    b = InlineKeyboardBuilder().button(text="⬅️", callback_data="admin_analytics_dashboard").as_markup()
     await callback.message.edit_text(text, reply_markup=b)
 
 
@@ -2622,8 +2667,8 @@ async def admin_traffic(event):
         text += "<i>Нет данных</i>"
     else:
         for name, d in sorted(sources.items(), key=lambda x: -x[1].get("total_revenue", 0)):
-            text += f"📍 {name}: {d.get('total_revenue', 0):.2f}₴ ({d.get('total_purchases', 0)})\n"
-    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_dashboard_refresh").as_markup()
+            text += f"📍 {name}: {d.get('total_revenue', 0):.2f}₴\n"
+    b = InlineKeyboardBuilder().button(text="⬅️", callback_data="admin_dashboard_refresh").as_markup()
     if edit:
         try:
             await target.edit_text(text, reply_markup=b, parse_mode="HTML")
@@ -2644,13 +2689,11 @@ async def admin_referrals(event):
     else:
         target = event
         edit = False
-
     referrals = load_referrals()
     bonus = get_setting("referral_bonus_percent", 5.0)
     total = sum(len(r.get("referrals_list", [])) for r in referrals.values())
     earned = sum(r.get("total_earned", 0) for r in referrals.values())
-
-    text = f"👥 Рефералы\n💰 Бонус: {bonus}%\n👥 Всего: {total}\n💸 Сумма: {earned:.2f}₴\n"
+    text = f"👥 Рефералы\n💰 Бонус: {bonus}%\n👥 Всего: {total}\n💸 {earned:.2f}₴\n"
     kb = admin_referrals_settings_keyboard()
     if edit:
         try:
@@ -2665,7 +2708,7 @@ async def admin_referrals(event):
 async def admin_edit_bonus(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     cur = get_setting("referral_bonus_percent", 5.0)
-    await callback.message.edit_text(f"Текущий бонус: {cur}%\nВведите новый:")
+    await callback.message.edit_text(f"Текущий: {cur}%\nВведите новый:")
     await state.set_state(AdminReferralSettingsStates.waiting_for_bonus_percent)
 
 
@@ -2676,21 +2719,21 @@ async def save_bonus(message: types.Message, state: FSMContext):
         if not (0 <= v <= 100):
             raise ValueError
     except:
-        await message.answer("❌ Число от 0 до 100")
+        await message.answer("❌ 0-100")
         return
     s = load_settings()
     s["referral_bonus_percent"] = v
     save_settings(s)
-    await message.answer(f"✅ Бонус: {v}%", reply_markup=get_admin_reply_keyboard())
+    await message.answer(f"✅ {v}%", reply_markup=get_admin_reply_keyboard())
     await state.clear()
 
 
-# ==================== АДМИН: ПОЛЬЗОВАТЕЛИ ====================
+# ==================== АДМИН: ЮЗЕРЫ / ЧАТ ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "👤 Пользователи")
 async def admin_users_list(message: types.Message):
     users = load_users()
     if not users:
-        return await message.answer("📋 Нет пользователей", reply_markup=get_admin_reply_keyboard())
+        return await message.answer("📋 Нет", reply_markup=get_admin_reply_keyboard())
     text = f"👤 ВСЕГО: {len(users)}\n"
     for uid, u in sorted(users.items(), key=lambda x: x[1].get("first_seen", ""), reverse=True)[:10]:
         text += f"👤 {u.get('full_name', '—')} (@{u.get('username', '—')})\nID: {uid}\n"
@@ -2701,10 +2744,9 @@ async def admin_users_list(message: types.Message):
 
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "🏠 Главное меню")
 async def admin_main_menu(message: types.Message):
-    await message.answer("🏠 Админ-меню", reply_markup=get_admin_reply_keyboard())
+    await message.answer("🏠", reply_markup=get_admin_reply_keyboard())
 
 
-# ==================== АДМИН: ЧАТ С ПОКУПАТЕЛЕМ ====================
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_chat_with_user_"))
 async def admin_chat_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -2714,7 +2756,7 @@ async def admin_chat_start(callback: types.CallbackQuery, state: FSMContext):
     if not rk:
         return
     await state.update_data(admin_chat_order_id=rk)
-    await callback.message.answer(f"💬 Введите сообщение покупателю по заказу {orders[rk].get('short_id', rk)}:")
+    await callback.message.answer(f"💬 Введите сообщение покупателю:")
     await state.set_state(AdminChatStates.waiting_for_message)
 
 
@@ -2725,13 +2767,13 @@ async def admin_chat_send(message: types.Message, state: FSMContext):
     orders = load_orders()
     rk = find_order_key(orders, oid)
     if not rk:
-        await message.answer("❌ Не найден")
+        await message.answer("❌")
         await state.clear()
         return
     order = orders[rk]
     try:
         await bot.send_message(order["user_id"], f"💬 Админ:\n{message.text}")
-        await message.answer("✅ Отправлено", reply_markup=get_admin_reply_keyboard())
+        await message.answer("✅", reply_markup=get_admin_reply_keyboard())
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=get_admin_reply_keyboard())
     await state.clear()
@@ -2745,14 +2787,12 @@ async def auto_broadcast_scheduler():
             users = load_users()
             orders = load_orders()
             now = datetime.now()
-
             for bid, bc in broadcasts.items():
                 if not bc.get("is_active"):
                     continue
                 days_inactive = bc.get("days_inactive")
                 if not days_inactive:
                     continue
-
                 for uid_str, u in users.items():
                     uid = int(uid_str)
                     user_orders = [o for o in orders.values() if o["user_id"] == uid and o["status"] == "completed"]
@@ -2778,11 +2818,10 @@ async def auto_broadcast_scheduler():
                         except:
                             pass
         except Exception as e:
-            logger.error(f"Broadcast scheduler: {e}")
+            logger.error(f"Scheduler: {e}")
         await asyncio.sleep(3600)
 
 
-# ==================== ГЛОБАЛЬНАЯ ОШИБКА ====================
 @dp.errors()
 async def error_handler(event):
     logger.error(f"Update error: {event.exception}")
@@ -2792,13 +2831,13 @@ async def error_handler(event):
 # ==================== ЗАПУСК ====================
 async def main():
     print("=" * 50)
-    print("OverPass Store Bot v2 — АВТОМАТИЗАЦИЯ")
+    print("OverPass Store Bot — Автоопределение страны")
     print("=" * 50)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
 
-    # Запускаем watchers для уже проданных аккаунтов
+    # Запускаем watchers для уже проданных
     if os.path.exists(ACCOUNTS_DIR):
         for c in os.listdir(ACCOUNTS_DIR):
             cd = country_dir(c)
