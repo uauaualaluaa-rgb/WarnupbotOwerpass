@@ -15,11 +15,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, FSInputFile
+    ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 )
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, functions
 
 # ==================== КОНФИГ ====================
 BOT_TOKEN = "8862811439:AAGKNCDLKgfHnhxsKoTH3CuzaLfnPb659R4"
@@ -94,7 +94,7 @@ def load_traffic_sources(): return load_json(TRAFFIC_SOURCES_FILE)
 def save_traffic_sources(t): save_json(TRAFFIC_SOURCES_FILE, t)
 
 
-# ==================== ОПРЕДЕЛЕНИЕ СТРАНЫ ====================
+# ==================== СТРАНЫ ====================
 COUNTRY_CODES = {
     "91": ("in", "🇮🇳 Индия"),
     "95": ("mm", "🇲🇲 Мьянма"),
@@ -159,8 +159,6 @@ def detect_country(phone: str) -> tuple:
     return ("unknown", "❓ Неизвестно")
 
 
-# ==================== ФИКСИРОВАННЫЕ ЦЕНЫ ====================
-# код страны: (цена UAH, цена Stars)
 DEFAULT_PRICES = {
     "in": (30, 40), "mm": (30, 40), "ng": (30, 40), "id": (30, 40),
     "us": (45, 65), "co": (45, 65), "bd": (45, 65),
@@ -206,16 +204,21 @@ def save_meta(country: str, name: str, meta: dict):
 
 async def analyze_session(session_file: str) -> dict:
     client = TelegramClient(session_file.replace(".session", ""), API_ID, API_HASH)
-    result = {"valid": False, "phone": None, "user_id": None, "first_name": None}
+    result = {
+        "valid": False, "phone": None, "user_id": None,
+        "first_name": None, "has_2fa": False, "password_hint": None,
+    }
     try:
         await client.connect()
         if not await client.is_user_authorized():
             result["error"] = "NOT_AUTHORIZED"
             return result
+
         me = await client.get_me()
         if not me:
             result["error"] = "NO_ME"
             return result
+
         result.update({
             "valid": True,
             "phone": me.phone,
@@ -224,6 +227,18 @@ async def analyze_session(session_file: str) -> dict:
             "username": me.username,
             "premium": getattr(me, "premium", False),
         })
+
+        # Проверка 2FA
+        try:
+            pwd = await client(functions.account.GetPasswordRequest())
+            has_password = getattr(pwd, "has_password", False)
+            hint = getattr(pwd, "hint", None)
+            if has_password:
+                result["has_2fa"] = True
+                result["password_hint"] = hint
+        except Exception as e:
+            logger.warning(f"2FA check failed: {e}")
+
     except Exception as e:
         result["error"] = f"{type(e).__name__}: {str(e)[:100]}"
     finally:
@@ -319,12 +334,15 @@ def get_user_accounts(user_id: int) -> list:
 # ==================== ПЕРЕХВАТ КОДОВ ====================
 active_watchers = {}
 watcher_users = {}
+watcher_passwords = {}
 
 
-async def watch_codes(session_file: str, user_id: int):
+async def watch_codes(session_file: str, user_id: int, password: str = None):
     session_name = os.path.basename(session_file).replace(".session", "")
     if session_name in active_watchers:
         watcher_users[session_name] = user_id
+        if password:
+            watcher_passwords[session_name] = password
         return
 
     client = TelegramClient(session_file.replace(".session", ""), API_ID, API_HASH)
@@ -333,6 +351,10 @@ async def watch_codes(session_file: str, user_id: int):
         await client.connect()
         if not await client.is_user_authorized():
             logger.warning(f"Watcher: {session_name} not authorized")
+            try:
+                await bot.send_message(user_id, "❌ Сессия недействительна. Напишите @MaskYoY")
+            except:
+                pass
             return
 
         @client.on(events.NewMessage(from_users=[777000]))
@@ -342,22 +364,21 @@ async def watch_codes(session_file: str, user_id: int):
             if match:
                 code = match.group(1)
                 target = watcher_users.get(session_name)
+                pwd = watcher_passwords.get(session_name)
                 if target:
+                    msg = f"🔑 <b>КОД ПОДТВЕРЖДЕНИЯ</b>\n\n<code>{code}</code>\n\n"
+                    if pwd:
+                        msg += f"🔐 <b>Пароль (2FA):</b> <code>{pwd}</code>\n\n"
+                    msg += "Введите код в Telegram сейчас же!"
                     try:
-                        await bot.send_message(
-                            chat_id=target,
-                            text=(
-                                f"🔑 <b>КОД ПОДТВЕРЖДЕНИЯ</b>\n\n"
-                                f"<code>{code}</code>\n\n"
-                                f"Введите его в Telegram сейчас же!"
-                            ),
-                            parse_mode="HTML"
-                        )
+                        await bot.send_message(target, msg, parse_mode="HTML")
                     except Exception as e:
                         logger.error(f"Send code error: {e}")
 
         active_watchers[session_name] = client
         watcher_users[session_name] = user_id
+        if password:
+            watcher_passwords[session_name] = password
         logger.info(f"Watcher started: {session_name}")
         await client.run_until_disconnected()
     except Exception as e:
@@ -367,10 +388,12 @@ async def watch_codes(session_file: str, user_id: int):
 
 
 async def start_code_watcher(country: str, session_name: str, user_id: int):
+    meta = load_meta(country, session_name)
+    pwd = meta.get("password") if meta else None
     sess = watcher_path(country, session_name)
     if not os.path.exists(sess):
         sess = session_path(country, session_name)
-    await watch_codes(sess, user_id)
+    await watch_codes(sess, user_id, pwd)
 
 
 # ==================== НАСТРОЙКИ ====================
@@ -461,8 +484,8 @@ async def add_user(user_id, username=None, full_name=None, ref_code=None):
 
 
 DEFAULT_REQUISITES = {
-    "uah": "💳 Карта Моно: 4874 0700 2513 7454",
-    "stars": "⭐ Отправьте звёзды в ЛС: @MaskYoY",
+    "uah": "💳 Карта Моно: 4874 0700 2513 7454\n\n🎁 Подарок в ЛС: @MaskYoY",
+    "stars": "🎁 Подарок в ЛС: @MaskYoY",
 }
 if not os.path.exists(REQUISITES_FILE):
     save_requisites(DEFAULT_REQUISITES)
@@ -549,6 +572,10 @@ class AdminStockStates(StatesGroup):
     waiting_for_session = State()
 
 
+class AdminPasswordStates(StatesGroup):
+    waiting_for_password = State()
+
+
 class AdminLevelStates(StatesGroup):
     waiting_for_min_spent = State()
     waiting_for_discount = State()
@@ -580,11 +607,11 @@ STATUS_CONFIG = {
 
 
 def method_label(m):
-    return {"uah": "Гривны (₴)", "stars": "Telegram Stars (⭐)"}.get(m, m)
+    return {"uah": "Гривны (₴)", "gift": "Подарок"}.get(m, m)
 
 
 def method_symbol(m):
-    return {"uah": "₴", "stars": "⭐"}.get(m, "")
+    return {"uah": "₴", "gift": "🎁"}.get(m, "")
 
 
 def generate_short_order_id():
@@ -753,7 +780,7 @@ def category_products_keyboard(category):
         in_stock = counts.get(code, 0)
 
         if in_stock > 0:
-            display = f"{product_name} — {in_stock} шт. | {price_data['uah']}₴ / {price_data['stars']}⭐"
+            display = f"{product_name} — {in_stock} шт. | {price_data['uah']}₴"
             cb = f"product_{category}_{code}"
         else:
             display = f"❌ {product_name} — НЕТ"
@@ -777,8 +804,8 @@ def quantity_keyboard():
 
 def payment_method_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="⭐ Оплатить звёздами", callback_data="pay_stars")
-    kb.button(text="💳 Оплатить гривнами", callback_data="pay_uah")
+    kb.button(text="🎁 Оплатить подарком (ЛС админу)", callback_data="pay_gift")
+    kb.button(text="💳 Оплатить гривнами (ЛС админу)", callback_data="pay_uah")
     kb.button(text="❌ Отмена", callback_data="main_menu")
     kb.adjust(1)
     return kb.as_markup()
@@ -803,6 +830,7 @@ def awaiting_payment_keyboard(order_id):
 
 def user_order_actions_keyboard(order_id):
     kb = InlineKeyboardBuilder()
+    kb.button(text="🔑 Запросить код", callback_data=f"request_code_{order_id}")
     kb.button(text="⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
     kb.button(text="🔄 Запросить замену", callback_data=f"user_replace_{order_id}")
     kb.button(text="💰 Запросить возврат", callback_data=f"user_refund_{order_id}")
@@ -864,7 +892,7 @@ def referral_menu_keyboard():
 def requisites_edit_keyboard():
     kb = InlineKeyboardBuilder()
     kb.button(text="💳 Изменить гривны", callback_data="edit_req_uah")
-    kb.button(text="⭐ Изменить звёзды", callback_data="edit_req_stars")
+    kb.button(text="🎁 Изменить подарок", callback_data="edit_req_gift")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -881,9 +909,7 @@ def admin_stock_menu_keyboard():
 def admin_order_card_keyboard(order_id, status, user_id):
     kb = InlineKeyboardBuilder()
     if status == "awaiting_payment":
-        kb.button(text="✅ Подтвердить оплату", callback_data=f"admin_confirm_payment_{order_id}")
-    elif status == "paid":
-        kb.button(text="📱 Выдать аккаунт", callback_data=f"admin_deliver_{order_id}")
+        kb.button(text="✅ Подтвердить оплату и выдать", callback_data=f"admin_confirm_payment_{order_id}")
     elif status == "completed":
         kb.button(text="💰 Возврат", callback_data=f"admin_refund_{order_id}")
     kb.button(text="💬 Написать покупателю", callback_data=f"admin_chat_with_user_{order_id}")
@@ -974,14 +1000,14 @@ FAQ_TEXT = """
 ❓ <b>КАК КУПИТЬ АККАУНТ?</b>
 
 1️⃣ Выберите категорию и страну
-2️⃣ Выберите способ оплаты (⭐/₴)
-3️⃣ Оплатите
-4️⃣ Аккаунт выдастся автоматически
+2️⃣ Выберите способ оплаты
+3️⃣ Напишите админу @MaskYoY и оплатите
+4️⃣ После подтверждения — аккаунт выдастся автоматически
 
 📱 <b>Как войти:</b>
-1. Получите .session после оплаты
+1. Получите .session
 2. Войдите в Telegram
-3. Когда придёт код — нажмите «🔑 Запросить код»
+3. Нажмите «🔑 Запросить код»
 4. Бот автоматически перешлёт код
 
 📞 @MaskYoY
@@ -1000,7 +1026,7 @@ async def cmd_start(message: types.Message):
                             message.from_user.full_name, ref_code=ref_code)
 
     if message.from_user.id == ADMIN_ID:
-        await message.answer("🔐 Админ-панель OverPass Store", reply_markup=get_admin_reply_keyboard())
+        await message.answer("🔐 Админ-панель", reply_markup=get_admin_reply_keyboard())
         return
 
     if not await check_subscription(message.from_user.id):
@@ -1067,8 +1093,7 @@ async def admin_upload_session_start(callback: types.CallbackQuery, state: FSMCo
     await callback.answer()
     await callback.message.edit_text(
         "📁 Отправьте файл <code>.session</code>.\n\n"
-        "Бот сам определит страну и номер по коду телефона.\n"
-        "Цена ставится автоматически по таблице.",
+        "Бот сам определит страну и проверит 2FA.",
         parse_mode="HTML"
     )
     await state.set_state(AdminStockStates.waiting_for_session)
@@ -1102,11 +1127,42 @@ async def admin_receive_session(message: types.Message, state: FSMContext):
     phone = info["phone"]
     country_code, country_name = detect_country(phone)
 
+    # Проверка 2FA — если пароль установлен и неизвестен
+    if info.get("has_2fa"):
+        hint = info.get("password_hint") or "—"
+        await status_msg.edit_text(
+            f"⚠️ <b>АККАУНТ С ПАРОЛЕМ!</b>\n\n"
+            f"🌍 {country_name}\n"
+            f"📱 <code>{phone}</code>\n"
+            f"🆔 <code>{info['user_id']}</code>\n"
+            f"🔐 Хинт: <code>{hint}</code>\n\n"
+            f"<b>НЕ добавлен на склад.</b>\n"
+            f"Сначала сними пароль в Telegram, потом загрузи заново.",
+            parse_mode="HTML"
+        )
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚠️ <b>АККАУНТ С ПАРОЛЕМ — НЕ ДОБАВЛЕН!</b>\n\n"
+                f"🌍 {country_name}\n"
+                f"📱 <code>{phone}</code>\n"
+                f"🔐 Хинт: <code>{hint}</code>\n\n"
+                f"Файл: <code>{doc.file_name}</code>",
+                parse_mode="HTML"
+            )
+        except:
+            pass
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+        await state.clear()
+        return
+
     if country_code not in DEFAULT_PRICES:
         await status_msg.edit_text(
-            f"⚠️ <b>Страна определена, но цены нет в таблице</b>\n\n"
-            f"🌍 {country_name}\n📱 <code>{phone}</code>\n🆔 <code>{country_code}</code>\n\n"
-            f"Добавь страну в DEFAULT_PRICES.",
+            f"⚠️ <b>Страна без цены</b>\n\n"
+            f"🌍 {country_name}\n📱 <code>{phone}</code>\n🆔 <code>{country_code}</code>",
             parse_mode="HTML"
         )
         try:
@@ -1132,6 +1188,8 @@ async def admin_receive_session(message: types.Message, state: FSMContext):
             "first_name": info.get("first_name"),
             "username": info.get("username"),
             "premium": info.get("premium", False),
+            "has_2fa": False,
+            "password": None,
             "price_uah": price_uah,
             "price_stars": price_stars,
             "status": "available",
@@ -1151,8 +1209,9 @@ async def admin_receive_session(message: types.Message, state: FSMContext):
             f"🌍 {country_name}\n"
             f"📱 <code>{phone}</code>\n"
             f"👤 {info.get('first_name', '—')}\n"
-            f"⭐ Premium: {'Да' if info.get('premium') else 'Нет'}\n\n"
-            f"💰 <b>Цена (авто):</b> {price_uah}₴ / {price_stars}⭐",
+            f"⭐ Premium: {'Да' if info.get('premium') else 'Нет'}\n"
+            f"🔐 2FA: Нет\n\n"
+            f"💰 {price_uah}₴",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -1167,7 +1226,8 @@ async def admin_list_accounts(callback: types.CallbackQuery):
     avail = all_available()
     text = f"📋 <b>ВСЕ АККАУНТЫ ({len(avail)})</b>\n\n"
     for acc in avail[:30]:
-        text += f"• {acc['country'].upper()} | {acc['phone']} | {acc['price_stars']}⭐\n"
+        pwd = " 🔐" if acc.get("password") else ""
+        text += f"• {acc['country'].upper()} | {acc['phone']} | {acc['price_uah']}₴{pwd}\n"
     if len(avail) > 30:
         text += f"\n...и ещё {len(avail) - 30}"
     kb = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_stock_menu").as_markup()
@@ -1181,16 +1241,12 @@ async def admin_statistics(message: types.Message):
     users = load_users()
     status_counts = {}
     rev_uah = 0
-    rev_stars = 0
 
     for order in orders.values():
         s = order["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
         if s == "completed" and not isinstance(order.get("total", 0), str):
-            if order.get("payment_method") == "uah":
-                rev_uah += order.get("total", 0)
-            elif order.get("payment_method") == "stars":
-                rev_stars += order.get("total", 0)
+            rev_uah += order.get("total", 0)
 
     counts = stock_count()
     text = (f"📊 СТАТИСТИКА\n"
@@ -1199,7 +1255,6 @@ async def admin_statistics(message: types.Message):
             f"✅ Выполнено: {status_counts.get('completed', 0)}\n"
             f"⏳ Ожидают: {status_counts.get('awaiting_payment', 0)}\n"
             f"💰 UAH: {rev_uah}\n"
-            f"⭐ Stars: {rev_stars}\n"
             f"📦 Склад: {sum(counts.values())}")
     await message.answer(text, reply_markup=get_admin_reply_keyboard())
 
@@ -1313,7 +1368,7 @@ async def admin_requisites(message: types.Message):
     req = load_requisites()
     text = (f"💰 РЕКВИЗИТЫ:\n"
             f"💳 Гривны:\n{req.get('uah', '—')}\n"
-            f"⭐ Звёзды:\n{req.get('stars', '—')}\n")
+            f"🎁 Подарок:\n{req.get('gift', '—')}\n")
     await message.answer(text, reply_markup=requisites_edit_keyboard())
 
 
@@ -1321,7 +1376,7 @@ async def admin_requisites(message: types.Message):
 async def edit_requisite_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     method = callback.data.replace("edit_req_", "")
-    labels = {"uah": "Гривны", "stars": "Звёзды"}
+    labels = {"uah": "Гривны", "gift": "Подарок"}
     await state.update_data(edit_req_method=method)
     await callback.message.answer(f"✏️ Введите новые реквизиты для {labels.get(method, method)}:")
     await state.set_state(AdminStates.waiting_for_requisites_edit)
@@ -1390,15 +1445,9 @@ async def admin_confirm_payment(callback: types.CallbackQuery):
     order["status"] = "paid"
     order["paid_at"] = datetime.now().isoformat()
     save_orders(orders)
-    try:
-        await bot.send_message(order["user_id"], f"✅ Оплата по {order.get('short_id', rk)} подтверждена.")
-    except:
-        pass
-    await callback.message.edit_text(
-        callback.message.text + f"\n✅ <b>ОПЛАЧЕНО</b>",
-        reply_markup=admin_order_card_keyboard(rk, "paid", order["user_id"]),
-        parse_mode="HTML"
-    )
+
+    await callback.message.edit_text("✅ Оплата подтверждена. Выдаю аккаунт...")
+    await deliver_to_user(order, rk)
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_reject_"))
@@ -1418,26 +1467,14 @@ async def admin_reject_order(callback: types.CallbackQuery):
         await bot.send_message(order["user_id"], f"❌ Заказ {order.get('short_id', rk)} отклонён")
     except:
         pass
-    await callback.message.edit_text(
-        callback.message.text + f"\n❌ <b>ОТКЛОНЁН</b>",
-        reply_markup=admin_order_card_keyboard(rk, "rejected", order["user_id"]),
-        parse_mode="HTML"
-    )
-
-
-@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_deliver_"))
-async def admin_deliver_account(callback: types.CallbackQuery):
-    await callback.answer()
-    oid = callback.data.replace("admin_deliver_", "")
-    orders = load_orders()
-    rk = find_order_key(orders, oid)
-    if not rk:
-        return
-    order = orders[rk]
-    if not order.get("session_name"):
-        await callback.answer("❌ Нет склада", show_alert=True)
-        return
-    await deliver_to_user(order, rk)
+    try:
+        await callback.message.edit_text(
+            callback.message.text + f"\n❌ <b>ОТКЛОНЁН</b>",
+            reply_markup=admin_order_card_keyboard(rk, "rejected", order["user_id"]),
+            parse_mode="HTML"
+        )
+    except:
+        pass
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_refund_"))
@@ -1476,6 +1513,11 @@ async def deliver_to_user(order: dict, order_key: str):
             pass
         return
 
+    meta = load_meta(country_code, session_name)
+    pwd_text = ""
+    if meta and meta.get("password"):
+        pwd_text = f"\n🔐 <b>Пароль:</b> <code>{meta['password']}</code>\n"
+
     try:
         await bot.send_document(
             chat_id=user_id,
@@ -1483,18 +1525,16 @@ async def deliver_to_user(order: dict, order_key: str):
             caption=(
                 f"🎉 <b>ВАШ АККАУНТ</b>\n\n"
                 f"🌍 {country_code.upper()}\n"
-                f"📱 {phone}\n\n"
+                f"📱 <code>{phone}</code>\n"
+                f"{pwd_text}\n"
                 f"<b>Как войти:</b>\n"
                 f"1. Telegram Desktop\n"
                 f"2. Используй .session\n"
-                f"3. Когда придёт код — нажми кнопку\n\n"
-                f"<b>Код придёт автоматически сюда!</b>"
+                f"3. Нажми кнопку и получи код\n\n"
+                f"<b>Код придёт сюда автоматически!</b>"
             ),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardBuilder().button(
-                text="🔑 Запросить код",
-                callback_data=f"request_code_{order_key}"
-            ).as_markup()
+            reply_markup=user_order_actions_keyboard(order_key)
         )
         mark_sold(country_code, session_name, user_id)
         order["status"] = "completed"
@@ -1748,8 +1788,15 @@ async def request_code_for_account(callback: types.CallbackQuery):
     if "_" not in data:
         return
     country, session_name = data.split("_", 1)
+
+    meta = load_meta(country, session_name)
+    phone = meta.get("phone") if meta else "—"
+
     await callback.message.answer(
-        "🔑 <b>Ожидайте код...</b>\n\nВойдите в Telegram, код придёт сюда автоматически.",
+        f"🔑 <b>Готово! Входи в Telegram.</b>\n\n"
+        f"📱 Номер: <code>{phone}</code>\n"
+        f"⏳ Как только Telegram пришлёт код — я сразу перешлю его сюда.\n\n"
+        f"<i>Держи этот чат открытым.</i>",
         parse_mode="HTML"
     )
     asyncio.create_task(start_code_watcher(country, session_name, callback.from_user.id))
@@ -1836,8 +1883,25 @@ async def request_code_cb(callback: types.CallbackQuery):
     if not rk:
         return
     order = orders[rk]
-    await callback.message.answer("🔑 <b>Ожидайте код...</b>", parse_mode="HTML")
-    asyncio.create_task(start_code_watcher(order["country_code"], order["session_name"], callback.from_user.id))
+    country = order["country_code"]
+    session_name = order["session_name"]
+    phone = order["phone"]
+
+    sess = watcher_path(country, session_name)
+    if not os.path.exists(sess):
+        sess = session_path(country, session_name)
+    if not os.path.exists(sess):
+        await callback.message.answer("❌ Файл сессии не найден. @MaskYoY")
+        return
+
+    await callback.message.answer(
+        f"🔑 <b>Готово! Входи в Telegram.</b>\n\n"
+        f"📱 Номер: <code>{phone}</code>\n"
+        f"⏳ Как только Telegram пришлёт код — я сразу перешлю его сюда.\n\n"
+        f"<i>Держи этот чат открытым.</i>",
+        parse_mode="HTML"
+    )
+    asyncio.create_task(start_code_watcher(country, session_name, callback.from_user.id))
 
 
 # ==================== ПОЛЬЗОВАТЕЛЬСКИЕ КНОПКИ ====================
@@ -2107,11 +2171,10 @@ async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
         return
 
     acc = avail[0]
-    await state.update_data(price_uah=acc["price_uah"], price_stars=acc["price_stars"])
+    await state.update_data(price_uah=acc["price_uah"])
 
     text = (f"📦 {data['product']}\n"
-            f"💰 {acc['price_uah']}₴\n"
-            f"⭐ {acc['price_stars']}\n\n"
+            f"💰 {acc['price_uah']}₴\n\n"
             f"Способ оплаты:")
 
     try:
@@ -2129,17 +2192,11 @@ async def process_payment_method(callback: types.CallbackQuery, state: FSMContex
 
     data = await state.get_data()
     price_uah = data.get("price_uah")
-    price_stars = data.get("price_stars")
-
-    if method == "stars":
-        total_text = f"{price_stars}⭐"
-    else:
-        total_text = f"{price_uah}₴"
 
     text = (f"📋 Подтверждение\n"
             f"Товар: {data['product']}\n"
-            f"Оплата: {method_label(method)}\n"
-            f"Сумма: {total_text}\n\n"
+            f"Оплата: {'🎁 Подарок' if method == 'gift' else '💳 Гривны'}\n"
+            f"Сумма: {price_uah}₴\n\n"
             f"Подтвердить?")
 
     try:
@@ -2166,7 +2223,7 @@ async def confirm_order(callback: types.CallbackQuery, state: FSMContext):
         return
 
     short_id = generate_short_order_id()
-    total = acc["price_stars"] if method == "stars" else acc["price_uah"]
+    total = acc["price_uah"]
 
     orders = load_orders()
     orders[short_id] = {
@@ -2183,60 +2240,39 @@ async def confirm_order(callback: types.CallbackQuery, state: FSMContext):
     }
     save_orders(orders)
 
-    if method == "stars":
-        try:
-            await bot.send_invoice(
-                chat_id=callback.from_user.id,
-                title=f"Аккаунт {acc['country'].upper()}",
-                description=f"Номер: {acc['phone']}\nЗаказ: {short_id}",
-                payload=f"acc_{short_id}",
-                provider_token="",
-                currency="XTR",
-                prices=[LabeledPrice(label="Аккаунт", amount=int(acc["price_stars"]))],
-                start_parameter=f"buy_{short_id}",
-            )
-            await callback.message.edit_text(
-                f"💳 <b>Счёт отправлен!</b>\n\nЗаказ: {short_id}\nСумма: {acc['price_stars']}⭐",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Invoice error: {e}")
-            await callback.message.edit_text(f"❌ Ошибка: {e}")
-    else:
-        requisites = get_requisites("uah")
-        await callback.message.edit_text(
-            f"✅ Заказ {short_id}\n\n{requisites}\n\nПосле оплаты напишите @MaskYoY",
-            reply_markup=awaiting_payment_keyboard(short_id)
+    # Уведомление админу
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"🆕 <b>НОВЫЙ ЗАКАЗ {short_id}</b>\n\n"
+            f"👤 @{callback.from_user.username} | {callback.from_user.full_name}\n"
+            f"🆔 <code>{callback.from_user.id}</code>\n"
+            f"🌍 {acc['country'].upper()} | 📱 {acc['phone']}\n"
+            f"💰 {total}₴ | {'🎁 Подарок' if method == 'gift' else '💳 Гривны'}\n\n"
+            f"Подтвердите оплату в <b>📋 Все заказы</b>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardBuilder().button(
+                text="📋 Открыть заказ",
+                callback_data=f"admin_order_detail_{short_id}"
+            ).as_markup()
         )
+    except Exception as e:
+        logger.error(f"Admin notify error: {e}")
+
+    requisites = get_requisites("uah" if method == "uah" else "gift")
+    await callback.message.edit_text(
+        f"✅ <b>Заказ {short_id} создан!</b>\n\n"
+        f"🌍 {acc['country'].upper()}\n"
+        f"📱 {acc['phone']}\n"
+        f"💰 <b>{total}₴</b>\n"
+        f"💳 Способ: {'🎁 Подарок' if method == 'gift' else '💳 Гривны'}\n\n"
+        f"<b>РЕКВИЗИТЫ:</b>\n{requisites}\n\n"
+        f"После оплаты напишите @MaskYoY и пришлите чек.",
+        parse_mode="HTML",
+        reply_markup=awaiting_payment_keyboard(short_id)
+    )
 
     await state.clear()
-
-
-@dp.pre_checkout_query()
-async def pre_checkout(query: PreCheckoutQuery):
-    await query.answer(ok=True)
-
-
-@dp.message(F.successful_payment)
-async def successful_payment(message: types.Message):
-    payload = message.successful_payment.invoice_payload
-    short_id = payload.replace("acc_", "")
-
-    orders = load_orders()
-    order = orders.get(short_id)
-    if not order:
-        await message.answer("❌ Заказ не найден")
-        return
-
-    if order["status"] == "completed":
-        return
-
-    order["status"] = "completed"
-    order["completed_at"] = datetime.now().isoformat()
-    save_orders(orders)
-
-    await bot.send_message(message.from_user.id, "✅ <b>Оплата получена!</b>\n\nВыдаю аккаунт...", parse_mode="HTML")
-    await deliver_to_user(order, short_id)
 
 
 # ==================== АДМИН: ПАНЕЛЬ ====================
@@ -2619,7 +2655,7 @@ async def error_handler(event):
 # ==================== ЗАПУСК ====================
 async def main():
     print("=" * 50)
-    print("OverPass Store Bot")
+    print("OverPass Store Bot v3")
     print("=" * 50)
 
     await bot.delete_webhook(drop_pending_updates=True)
