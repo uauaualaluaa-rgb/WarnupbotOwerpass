@@ -44,12 +44,11 @@ REQUISITES_FILE = "requisites.json"
 USERS_FILE = "users.json"
 REFERRALS_FILE = "referrals.json"
 PROMO_CODES_FILE = "promo_codes.json"
-PROMOTIONS_FILE = "promotions.json"
-BROADCASTS_FILE = "broadcasts.json"
-TRAFFIC_SOURCES_FILE = "traffic_sources.json"
 SETTINGS_FILE = "settings.json"
 ORDER_COUNTER_FILE = "order_counter.json"
 CHAT_HISTORY_FILE = "chat_history.json"
+BROADCASTS_FILE = "broadcasts.json"
+TRAFFIC_SOURCES_FILE = "traffic_sources.json"
 
 ACCOUNTS_DIR = "accounts"
 TEMP_DIR = "temp_sessions"
@@ -83,37 +82,38 @@ def load_referrals(): return load_json(REFERRALS_FILE)
 def save_referrals(r): save_json(REFERRALS_FILE, r)
 def load_promo_codes(): return load_json(PROMO_CODES_FILE)
 def save_promo_codes(p): save_json(PROMO_CODES_FILE, p)
-def load_promotions(): return load_json(PROMOTIONS_FILE)
-def save_promotions(p): save_json(PROMOTIONS_FILE, p)
-def load_broadcasts(): return load_json(BROADCASTS_FILE)
-def save_broadcasts(b): save_json(BROADCASTS_FILE, b)
-def load_traffic_sources(): return load_json(TRAFFIC_SOURCES_FILE)
-def save_traffic_sources(t): save_json(TRAFFIC_SOURCES_FILE, t)
 def load_settings(): return load_json(SETTINGS_FILE)
 def save_settings(s): save_json(SETTINGS_FILE, s)
 def load_order_counter(): return load_json(ORDER_COUNTER_FILE)
 def save_order_counter(c): save_json(ORDER_COUNTER_FILE, c)
 def load_chat_history(): return load_json(CHAT_HISTORY_FILE)
 def save_chat_history(c): save_json(CHAT_HISTORY_FILE, c)
+def load_broadcasts(): return load_json(BROADCASTS_FILE)
+def save_broadcasts(b): save_json(BROADCASTS_FILE, b)
+def load_traffic_sources(): return load_json(TRAFFIC_SOURCES_FILE)
+def save_traffic_sources(t): save_json(TRAFFIC_SOURCES_FILE, t)
 
 
-# ==================== ОПРЕДЕЛЕНИЕ СТРАНЫ ПО НОМЕРУ ====================
+# ==================== ОПРЕДЕЛЕНИЕ СТРАНЫ ====================
 COUNTRY_CODES = {
+    "91": ("in", "🇮🇳 Индия"),
     "95": ("mm", "🇲🇲 Мьянма"),
+    "234": ("ng", "🇳🇬 Нигерия"),
+    "62": ("id", "🇮🇩 Индонезия"),
     "1": ("us", "🇺🇸 США"),
     "57": ("co", "🇨🇴 Колумбия"),
     "880": ("bd", "🇧🇩 Бангладеш"),
-    "33": ("fr", "🇫🇷 Франция"),
-    "55": ("br", "🇧🇷 Бразилия"),
     "998": ("uz", "🇺🇿 Узбекистан"),
     "66": ("th", "🇹🇭 Таиланд"),
     "44": ("gb", "🇬🇧 Великобритания"),
+    "222": ("mr", "🇲🇷 Мавритания"),
     "380": ("ua", "🇺🇦 Украина"),
     "375": ("by", "🇧🇾 Беларусь"),
     "77": ("kz", "🇰🇿 Казахстан"),
     "7": ("ru", "🇷🇺 Россия"),
     "48": ("pl", "🇵🇱 Польша"),
     "49": ("de", "🇩🇪 Германия"),
+    "33": ("fr", "🇫🇷 Франция"),
     "36": ("hu", "🇭🇺 Венгрия"),
     "299": ("gl", "🇬🇱 Гренландия"),
     "995": ("ge", "🇬🇪 Грузия"),
@@ -125,13 +125,11 @@ COUNTRY_CODES = {
     "372": ("ee", "🇪🇪 Эстония"),
     "90": ("tr", "🇹🇷 Турция"),
     "972": ("il", "🇮🇱 Израиль"),
-    "91": ("in", "🇮🇳 Индия"),
     "86": ("cn", "🇨🇳 Китай"),
     "81": ("jp", "🇯🇵 Япония"),
     "82": ("kr", "🇰🇷 Корея"),
     "84": ("vn", "🇻🇳 Вьетнам"),
     "63": ("ph", "🇵🇭 Филиппины"),
-    "62": ("id", "🇮🇩 Индонезия"),
     "60": ("my", "🇲🇾 Малайзия"),
     "65": ("sg", "🇸🇬 Сингапур"),
     "46": ("se", "🇸🇪 Швеция"),
@@ -151,18 +149,29 @@ COUNTRY_CODES = {
 
 
 def detect_country(phone: str) -> tuple:
-    """Определяет (код_страны, название) по номеру телефона"""
     if not phone:
         return ("unknown", "❓ Неизвестно")
-    
     clean = phone.replace("+", "").replace(" ", "").replace("-", "")
-    
     for length in (3, 2, 1):
         prefix = clean[:length]
         if prefix in COUNTRY_CODES:
             return COUNTRY_CODES[prefix]
-    
     return ("unknown", "❓ Неизвестно")
+
+
+# ==================== ФИКСИРОВАННЫЕ ЦЕНЫ ====================
+# код страны: (цена UAH, цена Stars)
+DEFAULT_PRICES = {
+    "in": (30, 40), "mm": (30, 40), "ng": (30, 40), "id": (30, 40),
+    "us": (45, 65), "co": (45, 65), "bd": (45, 65),
+    "uz": (80, 125), "th": (80, 125),
+    "gb": (120, 150), "mr": (120, 150),
+    "ua": (150, 200), "by": (150, 200), "kz": (150, 200),
+    "pl": (150, 200), "de": (150, 200), "ru": (150, 200),
+    "fr": (150, 200), "hu": (200, 300), "gl": (250, 350),
+    "tt": (50, 65), "tt_live": (240, 300),
+    "dc": (40, 50), "dc_nitro": (150, 200),
+}
 
 
 # ==================== СКЛАД ====================
@@ -196,22 +205,17 @@ def save_meta(country: str, name: str, meta: dict):
 
 
 async def analyze_session(session_file: str) -> dict:
-    """Читает данные аккаунта из .session"""
     client = TelegramClient(session_file.replace(".session", ""), API_ID, API_HASH)
     result = {"valid": False, "phone": None, "user_id": None, "first_name": None}
-    
     try:
         await client.connect()
-        
         if not await client.is_user_authorized():
             result["error"] = "NOT_AUTHORIZED"
             return result
-        
         me = await client.get_me()
         if not me:
             result["error"] = "NO_ME"
             return result
-        
         result.update({
             "valid": True,
             "phone": me.phone,
@@ -227,7 +231,6 @@ async def analyze_session(session_file: str) -> dict:
             await client.disconnect()
         except:
             pass
-    
     return result
 
 
@@ -384,8 +387,8 @@ if not os.path.exists(SETTINGS_FILE):
 
 
 def get_setting(key, default=None):
-    settings = load_settings()
-    return settings.get(key, DEFAULT_SETTINGS.get(key, default))
+    s = load_settings()
+    return s.get(key, DEFAULT_SETTINGS.get(key, default))
 
 
 LEVEL_KEYS = {"bronze": "Бронза", "silver": "Серебро", "gold": "Золото", "platinum": "Платина", "vip": "VIP"}
@@ -406,7 +409,6 @@ async def add_user(user_id, username=None, full_name=None, ref_code=None):
             "referred_by": None, "referral_code": None,
             "total_spent": 0.0, "orders_count": 0, "traffic_source": None,
         }
-
         if ref_code and ref_code.startswith("ref_"):
             actual = ref_code[4:]
             for rid, rdata in referrals.items():
@@ -418,7 +420,6 @@ async def add_user(user_id, username=None, full_name=None, ref_code=None):
                         "first_purchase_done": False,
                     })
                     break
-
         if ref_code and not ref_code.startswith("ref_"):
             users[key]["traffic_source"] = ref_code
             sources = load_traffic_sources()
@@ -431,7 +432,6 @@ async def add_user(user_id, username=None, full_name=None, ref_code=None):
             sources[ref_code]["total_visits"] += 1
             sources[ref_code]["total_registrations"] += 1
             save_traffic_sources(sources)
-
         own_code = hashlib.md5(f"{user_id}_ref_salt".encode()).hexdigest()[:8].upper()
         users[key]["referral_code"] = own_code
         referrals.setdefault(key, {
@@ -447,12 +447,10 @@ async def add_user(user_id, username=None, full_name=None, ref_code=None):
         users[key]["username"] = username
     if full_name:
         users[key]["full_name"] = full_name
-
     own_code = users[key].get("referral_code")
     if not own_code:
         own_code = hashlib.md5(f"{user_id}_ref_salt".encode()).hexdigest()[:8].upper()
         users[key]["referral_code"] = own_code
-
     referrals.setdefault(key, {
         "user_id": user_id, "referral_code": own_code,
         "referrals_list": [], "total_earned": 0.0,
@@ -480,45 +478,50 @@ CATEGORIES = {
     "regular": {
         "name": "📞 ОБЫЧНЫЕ НОМЕРА",
         "products": {
-            "🇲🇲 Мьянма (+95)": {"uah": 30, "stars": 40, "emoji": "🇲🇲", "code": "mm"},
-            "🇺🇸 США (+1)": {"uah": 45, "stars": 65, "emoji": "🇺🇸", "code": "us"},
-            "🇨🇴 Колумбия (+57)": {"uah": 45, "stars": 65, "emoji": "🇨🇴", "code": "co"},
-            "🇧🇩 Бангладеш (+880)": {"uah": 45, "stars": 65, "emoji": "🇧🇩", "code": "bd"},
-            "🇫🇷 Франция (+33)": {"uah": 75, "stars": 100, "emoji": "🇫🇷", "code": "fr"},
-            "🇧🇷 Бразилия (+55)": {"uah": 75, "stars": 100, "emoji": "🇧🇷", "code": "br"},
-            "🇺🇿 Узбекистан (+998)": {"uah": 75, "stars": 100, "emoji": "🇺🇿", "code": "uz"},
-            "🇹🇭 Таиланд (+66)": {"uah": 80, "stars": 100, "emoji": "🇹🇭", "code": "th"},
-            "🇬🇧 Великобритания (+44)": {"uah": 120, "stars": 115, "emoji": "🇬🇧", "code": "gb"},
-            "🇺🇦 Украина (+380)": {"uah": 150, "stars": 150, "emoji": "🇺🇦", "code": "ua"},
-            "🇧🇾 Беларусь (+375)": {"uah": 150, "stars": 200, "emoji": "🇧🇾", "code": "by"},
-            "🇰🇿 Казахстан (+7)": {"uah": 150, "stars": 200, "emoji": "🇰🇿", "code": "kz"},
-            "🇵🇱 Польша (+48)": {"uah": 150, "stars": 200, "emoji": "🇵🇱", "code": "pl"},
-            "🇷🇺 Россия (+7)": {"uah": 150, "stars": 200, "emoji": "🇷🇺", "code": "ru"},
-            "🇩🇪 Германия (+49)": {"uah": 150, "stars": 200, "emoji": "🇩🇪", "code": "de"},
-        },
-    },
-    "premium": {
-        "name": "⭐️ НОМЕРА С PREMIUM",
-        "products": {
-            "🇺🇸 США (+1)": {"uah": 180, "stars": 250, "emoji": "🇺🇸", "code": "us"},
-            "🇺🇿 Узбекистан (+998)": {"uah": 350, "stars": 400, "emoji": "🇺🇿", "code": "uz"},
-            "🇺🇦 Украина (+380)": {"uah": 350, "stars": 400, "emoji": "🇺🇦", "code": "ua"},
-            "🇰🇿 Казахстан (+7)": {"uah": 400, "stars": 500, "emoji": "🇰🇿", "code": "kz"},
-            "🇩🇪 Германия (+49)": {"uah": 400, "stars": 500, "emoji": "🇩🇪", "code": "de"},
+            "🇮🇳 Индия (+91)":          {"uah": 30,  "stars": 40,  "emoji": "🇮🇳", "code": "in"},
+            "🇲🇲 Мьянма (+95)":         {"uah": 30,  "stars": 40,  "emoji": "🇲🇲", "code": "mm"},
+            "🇳🇬 Нигерия (+234)":       {"uah": 30,  "stars": 40,  "emoji": "🇳🇬", "code": "ng"},
+            "🇮🇩 Индонезия (+62)":      {"uah": 30,  "stars": 40,  "emoji": "🇮🇩", "code": "id"},
+            "🇺🇸 США (+1)":             {"uah": 45,  "stars": 65,  "emoji": "🇺🇸", "code": "us"},
+            "🇨🇴 Колумбия (+57)":       {"uah": 45,  "stars": 65,  "emoji": "🇨🇴", "code": "co"},
+            "🇧🇩 Бангладеш (+880)":     {"uah": 45,  "stars": 65,  "emoji": "🇧🇩", "code": "bd"},
+            "🇺🇿 Узбекистан (+998)":    {"uah": 80,  "stars": 125, "emoji": "🇺🇿", "code": "uz"},
+            "🇹🇭 Таиланд (+66)":        {"uah": 80,  "stars": 125, "emoji": "🇹🇭", "code": "th"},
+            "🇬🇧 Великобритания (+44)": {"uah": 120, "stars": 150, "emoji": "🇬🇧", "code": "gb"},
+            "🇲🇷 Мавритания (+222)":    {"uah": 120, "stars": 150, "emoji": "🇲🇷", "code": "mr"},
+            "🇺🇦 Украина (+380)":       {"uah": 150, "stars": 200, "emoji": "🇺🇦", "code": "ua"},
+            "🇧🇾 Беларусь (+375)":      {"uah": 150, "stars": 200, "emoji": "🇧🇾", "code": "by"},
+            "🇰🇿 Казахстан (+7)":       {"uah": 150, "stars": 200, "emoji": "🇰🇿", "code": "kz"},
+            "🇵🇱 Польша (+48)":         {"uah": 150, "stars": 200, "emoji": "🇵🇱", "code": "pl"},
+            "🇩🇪 Германия (+49)":       {"uah": 150, "stars": 200, "emoji": "🇩🇪", "code": "de"},
         },
     },
     "physical": {
         "name": "☎️ ФИЗ НОМЕРА",
         "products": {
-            "🇺🇸 США (+1)": {"uah": 100, "stars": 150, "emoji": "🇺🇸", "code": "us"},
-            "🇺🇦 Украина (+380)": {"uah": 200, "stars": 300, "emoji": "🇺🇦", "code": "ua"},
-            "🇺🇿 Узбекистан (+998)": {"uah": 100, "stars": 150, "emoji": "🇺🇿", "code": "uz"},
-            "🇨🇴 Колумбия (+57)": {"uah": 100, "stars": 150, "emoji": "🇨🇴", "code": "co"},
-            "🇹🇭 Таиланд (+66)": {"uah": 120, "stars": 175, "emoji": "🇹🇭", "code": "th"},
-            "🇰🇿 Казахстан (+77)": {"uah": 200, "stars": 300, "emoji": "🇰🇿", "code": "kz"},
-            "🇭🇺 Венгрия (+36)": {"uah": 200, "stars": 300, "emoji": "🇭🇺", "code": "hu"},
-            "🇬🇱 Гренландия (+299)": {"uah": 250, "stars": 350, "emoji": "🇬🇱", "code": "gl"},
-            "🇵🇱 Польша (+48)": {"uah": 250, "stars": 350, "emoji": "🇵🇱", "code": "pl"},
+            "🇺🇸 США (+1)":            {"uah": 150, "stars": 200, "emoji": "🇺🇸", "code": "us"},
+            "🇺🇦 Украина (+380)":      {"uah": 200, "stars": 300, "emoji": "🇺🇦", "code": "ua"},
+            "🇺🇿 Узбекистан (+998)":   {"uah": 140, "stars": 200, "emoji": "🇺🇿", "code": "uz"},
+            "🇹🇭 Таиланд (+66)":       {"uah": 120, "stars": 175, "emoji": "🇹🇭", "code": "th"},
+            "🇫🇷 Франция (+33)":       {"uah": 150, "stars": 200, "emoji": "🇫🇷", "code": "fr"},
+            "🇰🇿 Казахстан (+77)":     {"uah": 200, "stars": 300, "emoji": "🇰🇿", "code": "kz"},
+            "🇭🇺 Венгрия (+36)":       {"uah": 200, "stars": 300, "emoji": "🇭🇺", "code": "hu"},
+            "🇬🇱 Гренландия (+299)":   {"uah": 250, "stars": 350, "emoji": "🇬🇱", "code": "gl"},
+            "🇵🇱 Польша (+48)":        {"uah": 250, "stars": 350, "emoji": "🇵🇱", "code": "pl"},
+        },
+    },
+    "tiktok": {
+        "name": "📱 TIKTOK",
+        "products": {
+            "Обычный TikTok":        {"uah": 50,  "stars": 65,  "emoji": "📱", "code": "tt"},
+            "TikTok с эфирами":      {"uah": 240, "stars": 300, "emoji": "📱", "code": "tt_live"},
+        },
+    },
+    "discord": {
+        "name": "💬 DISCORD",
+        "products": {
+            "Новый Discord":         {"uah": 40,  "stars": 50,  "emoji": "💬", "code": "dc"},
+            "Discord с Nitro":       {"uah": 150, "stars": 200, "emoji": "💬", "code": "dc_nitro"},
         },
     },
 }
@@ -537,10 +540,6 @@ class OrderStates(StatesGroup):
     waiting_for_confirmation = State()
 
 
-class CheckoutPromoStates(StatesGroup):
-    waiting_for_promo_code = State()
-
-
 class AdminStates(StatesGroup):
     waiting_for_requisites_edit = State()
     waiting_for_broadcast = State()
@@ -548,22 +547,6 @@ class AdminStates(StatesGroup):
 
 class AdminStockStates(StatesGroup):
     waiting_for_session = State()
-    waiting_for_price_uah = State()
-    waiting_for_price_stars = State()
-
-
-class AdminPromoStates(StatesGroup):
-    waiting_for_promo_code = State()
-    waiting_for_discount_type = State()
-    waiting_for_discount_value = State()
-    waiting_for_max_uses = State()
-    waiting_for_expires_date = State()
-
-
-class AdminBroadcastTemplateStates(StatesGroup):
-    waiting_for_days = State()
-    waiting_for_text = State()
-    waiting_for_button = State()
 
 
 class AdminLevelStates(StatesGroup):
@@ -724,9 +707,8 @@ def get_admin_reply_keyboard():
     b.row(KeyboardButton(text="📦 Склад"), KeyboardButton(text="💰 Реквизиты"))
     b.row(KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="👤 Пользователи"))
     b.row(KeyboardButton(text="📈 Панель управления"), KeyboardButton(text="🏠 Главное меню"))
-    b.row(KeyboardButton(text="🔥 Акции"), KeyboardButton(text="🎟 Промокоды"))
-    b.row(KeyboardButton(text="⭐ Уровни"), KeyboardButton(text="👥 Рефералы"))
-    b.row(KeyboardButton(text="📢 Рассылки"), KeyboardButton(text="📊 Аналитика"))
+    b.row(KeyboardButton(text="🎟 Промокоды"), KeyboardButton(text="⭐ Уровни"))
+    b.row(KeyboardButton(text="👥 Рефералы"), KeyboardButton(text="📊 Аналитика"))
     b.row(KeyboardButton(text="🔗 Источники"))
     return b.as_markup(resize_keyboard=True)
 
@@ -804,7 +786,7 @@ def payment_method_keyboard():
 
 def confirm_order_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Подтвердить заказ", callback_data="confirm_order")
+    kb.button(text="✅ Подтвердить", callback_data="confirm_order")
     kb.button(text="❌ Отмена", callback_data="main_menu")
     kb.adjust(1)
     return kb.as_markup()
@@ -904,7 +886,6 @@ def admin_order_card_keyboard(order_id, status, user_id):
         kb.button(text="📱 Выдать аккаунт", callback_data=f"admin_deliver_{order_id}")
     elif status == "completed":
         kb.button(text="💰 Возврат", callback_data=f"admin_refund_{order_id}")
-
     kb.button(text="💬 Написать покупателю", callback_data=f"admin_chat_with_user_{order_id}")
     kb.button(text="❌ Отменить", callback_data=f"admin_reject_{order_id}")
     kb.button(text="⬅️ Назад", callback_data="admin_back_to_list")
@@ -927,7 +908,6 @@ def admin_all_orders_keyboard(page=0, per_page=5, status_filter=None):
 
     start = page * per_page
     end = start + per_page
-
     for oid, order in order_list[start:end]:
         emoji, _ = STATUS_CONFIG.get(order["status"], ("❓", ""))
         symbol = method_symbol(order.get("payment_method", "uah"))
@@ -954,23 +934,10 @@ def admin_dashboard_keyboard():
     kb.button(text="👥 Рефералы", callback_data="admin_referrals_dashboard")
     kb.button(text="🎟 Промокоды", callback_data="admin_promo_dashboard")
     kb.button(text="⭐ Уровни", callback_data="admin_levels_dashboard")
-    kb.button(text="📢 Рассылки", callback_data="admin_broadcasts_dashboard")
     kb.button(text="📊 Аналитика", callback_data="admin_analytics_dashboard")
     kb.button(text="🔗 Источники", callback_data="admin_traffic_dashboard")
     kb.button(text="🔄 Обновить", callback_data="admin_dashboard_refresh")
-    kb.adjust(2, 2, 2, 2, 1)
-    return kb.as_markup()
-
-
-def admin_promo_codes_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Создать промокод", callback_data="admin_create_promo_code")
-    for code, data in list(load_promo_codes().items())[:10]:
-        status = "🟢" if data.get("is_active", True) else "🔴"
-        uses = f"{data.get('current_uses', 0)}/{data.get('max_uses', '∞')}"
-        kb.button(text=f"{status} {code} ({uses})", callback_data=f"admin_promo_code_detail_{code}")
-    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
-    kb.adjust(1)
+    kb.adjust(2, 2, 2, 1, 1)
     return kb.as_markup()
 
 
@@ -979,17 +946,6 @@ def admin_levels_keyboard():
     for k, name, e in [("bronze", "Бронза", "🥉"), ("silver", "Серебро", "🥈"),
                        ("gold", "Золото", "🥇"), ("platinum", "Платина", "💎"), ("vip", "VIP", "👑")]:
         kb.button(text=f"{e} {name}", callback_data=f"admin_edit_level_{k}")
-    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_broadcasts_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Создать рассылку", callback_data="admin_create_broadcast_template")
-    for bid, bc in load_broadcasts().items():
-        status = "🟢" if bc.get("is_active", True) else "🔴"
-        kb.button(text=f"{status} {bc.get('days_inactive', '?')} дней", callback_data=f"admin_broadcast_detail_{bid}")
     kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
     kb.adjust(1)
     return kb.as_markup()
@@ -1017,19 +973,19 @@ def admin_analytics_keyboard():
 FAQ_TEXT = """
 ❓ <b>КАК КУПИТЬ АККАУНТ?</b>
 
-1️⃣ Выберите категорию и страну в каталоге
-2️⃣ Выберите способ оплаты (звёзды/гривны)
-3️⃣ Подтвердите заказ
-4️⃣ Оплатите — аккаунт выдастся автоматически
+1️⃣ Выберите категорию и страну
+2️⃣ Выберите способ оплаты (⭐/₴)
+3️⃣ Оплатите
+4️⃣ Аккаунт выдастся автоматически
 
 📱 <b>Как войти:</b>
 1. Получите .session после оплаты
 2. Войдите в Telegram
 3. Когда придёт код — нажмите «🔑 Запросить код»
-4. Бот автоматически перешлёт код в этот чат
+4. Бот автоматически перешлёт код
 
-📞 Продавец: @MaskYoY
-📢 Канал: @owerpass_store
+📞 @MaskYoY
+📢 @owerpass_store
 """
 
 
@@ -1065,15 +1021,15 @@ async def process_check_sub(callback: types.CallbackQuery):
     await callback.answer()
     if await check_subscription(callback.from_user.id):
         try:
-            await callback.message.edit_text("🎉 Спасибо за подписку!", reply_markup=main_menu_keyboard())
+            await callback.message.edit_text("🎉 Спасибо!", reply_markup=main_menu_keyboard())
         except:
             await callback.message.answer("🎉 Спасибо!", reply_markup=main_menu_keyboard())
         await callback.message.answer("Навигация:", reply_markup=get_main_reply_keyboard())
     else:
-        await callback.answer("❌ Вы не подписались!", show_alert=True)
+        await callback.answer("❌ Не подписались!", show_alert=True)
 
 
-# ==================== АДМИН: СКЛАД (АВТООПРЕДЕЛЕНИЕ) ====================
+# ==================== АДМИН: СКЛАД ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📦 Склад")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_stock_menu")
 async def admin_stock_menu(event):
@@ -1111,7 +1067,8 @@ async def admin_upload_session_start(callback: types.CallbackQuery, state: FSMCo
     await callback.answer()
     await callback.message.edit_text(
         "📁 Отправьте файл <code>.session</code>.\n\n"
-        "Бот <b>сам</b> определит страну и номер по коду телефона.",
+        "Бот сам определит страну и номер по коду телефона.\n"
+        "Цена ставится автоматически по таблице.",
         parse_mode="HTML"
     )
     await state.set_state(AdminStockStates.waiting_for_session)
@@ -1132,8 +1089,7 @@ async def admin_receive_session(message: types.Message, state: FSMContext):
 
     if not info.get("valid"):
         await status_msg.edit_text(
-            f"❌ <b>Сессия невалидна</b>\n\n"
-            f"Причина: <code>{info.get('error', 'unknown')}</code>",
+            f"❌ <b>Сессия невалидна</b>\n\nПричина: <code>{info.get('error', 'unknown')}</code>",
             parse_mode="HTML"
         )
         try:
@@ -1146,94 +1102,62 @@ async def admin_receive_session(message: types.Message, state: FSMContext):
     phone = info["phone"]
     country_code, country_name = detect_country(phone)
 
-    await state.update_data(
-        session_temp_path=temp_path,
-        session_name=doc.file_name.replace(".session", ""),
-        detected_phone=phone,
-        detected_country=country_code,
-        detected_country_name=country_name,
-        detected_user_id=info["user_id"],
-        detected_first_name=info.get("first_name"),
-        detected_username=info.get("username"),
-        detected_premium=info.get("premium", False),
-    )
-
-    await status_msg.edit_text(
-        f"✅ <b>Сессия валидна!</b>\n\n"
-        f"🌍 Страна: <b>{country_name}</b>\n"
-        f"📱 Номер: <code>{phone}</code>\n"
-        f"👤 Имя: {info.get('first_name', '—')}\n"
-        f"🆔 ID: <code>{info['user_id']}</code>\n"
-        f"⭐ Premium: {'Да' if info.get('premium') else 'Нет'}\n\n"
-        f"💰 Введите цену в гривнах:",
-        parse_mode="HTML"
-    )
-    await state.set_state(AdminStockStates.waiting_for_price_uah)
-
-
-@dp.message(AdminStockStates.waiting_for_price_uah, F.text)
-async def admin_receive_price_uah(message: types.Message, state: FSMContext):
-    try:
-        price = float(message.text)
-    except:
-        await message.answer("❌ Введите число")
-        return
-    await state.update_data(stock_price_uah=price)
-    await message.answer("⭐ Введите цену в звёздах:")
-    await state.set_state(AdminStockStates.waiting_for_price_stars)
-
-
-@dp.message(AdminStockStates.waiting_for_price_stars, F.text)
-async def admin_receive_price_stars(message: types.Message, state: FSMContext):
-    try:
-        stars = int(message.text)
-    except:
-        await message.answer("❌ Введите целое число")
+    if country_code not in DEFAULT_PRICES:
+        await status_msg.edit_text(
+            f"⚠️ <b>Страна определена, но цены нет в таблице</b>\n\n"
+            f"🌍 {country_name}\n📱 <code>{phone}</code>\n🆔 <code>{country_code}</code>\n\n"
+            f"Добавь страну в DEFAULT_PRICES.",
+            parse_mode="HTML"
+        )
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+        await state.clear()
         return
 
-    data = await state.get_data()
-    country = data["detected_country"]
-    phone = data["detected_phone"]
-    name = data["session_name"]
-    temp = data["session_temp_path"]
+    price_uah, price_stars = DEFAULT_PRICES[country_code]
+    name = doc.file_name.replace(".session", "")
 
     try:
-        os.makedirs(country_dir(country), exist_ok=True)
-        shutil.copy(temp, session_path(country, name))
-        shutil.copy(temp, watcher_path(country, name))
+        os.makedirs(country_dir(country_code), exist_ok=True)
+        shutil.copy(temp_path, session_path(country_code, name))
+        shutil.copy(temp_path, watcher_path(country_code, name))
 
         meta = {
-            "country": country,
+            "country": country_code,
             "session_name": name,
             "phone": phone,
-            "user_id": data["detected_user_id"],
-            "first_name": data.get("detected_first_name"),
-            "username": data.get("detected_username"),
-            "premium": data.get("detected_premium", False),
-            "price_uah": data["stock_price_uah"],
-            "price_stars": stars,
+            "user_id": info["user_id"],
+            "first_name": info.get("first_name"),
+            "username": info.get("username"),
+            "premium": info.get("premium", False),
+            "price_uah": price_uah,
+            "price_stars": price_stars,
             "status": "available",
             "added_at": datetime.now().isoformat(),
             "sold_at": None,
             "sold_to": None,
         }
-        save_meta(country, name, meta)
+        save_meta(country_code, name, meta)
 
         try:
-            os.remove(temp)
+            os.remove(temp_path)
         except:
             pass
 
-        await message.answer(
+        await status_msg.edit_text(
             f"✅ <b>Аккаунт добавлен!</b>\n\n"
-            f"🌍 {data['detected_country_name']}\n"
-            f"📱 {phone}\n"
-            f"💰 {data['stock_price_uah']}₴ / {stars}⭐",
-            reply_markup=get_admin_reply_keyboard(),
+            f"🌍 {country_name}\n"
+            f"📱 <code>{phone}</code>\n"
+            f"👤 {info.get('first_name', '—')}\n"
+            f"⭐ Premium: {'Да' if info.get('premium') else 'Нет'}\n\n"
+            f"💰 <b>Цена (авто):</b> {price_uah}₴ / {price_stars}⭐",
             parse_mode="HTML"
         )
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+        await status_msg.edit_text(f"❌ Ошибка: {e}")
+
     await state.clear()
 
 
@@ -1250,7 +1174,7 @@ async def admin_list_accounts(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
-# ==================== АДМИН: СТАТИСТИКА / ЗАКАЗЫ ====================
+# ==================== АДМИН: СТАТИСТИКА ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "📊 Статистика")
 async def admin_statistics(message: types.Message):
     orders = load_orders()
@@ -1270,7 +1194,7 @@ async def admin_statistics(message: types.Message):
 
     counts = stock_count()
     text = (f"📊 СТАТИСТИКА\n"
-            f"👤 Пользователей: {len(users)}\n"
+            f"👤 Юзеров: {len(users)}\n"
             f"📦 Заказов: {len(orders)}\n"
             f"✅ Выполнено: {status_counts.get('completed', 0)}\n"
             f"⏳ Ожидают: {status_counts.get('awaiting_payment', 0)}\n"
@@ -1342,14 +1266,14 @@ async def admin_order_detail(callback: types.CallbackQuery):
     await callback.answer()
     oid = callback.data.replace("admin_order_detail_", "")
     orders = load_orders()
-    real_key = find_order_key(orders, oid)
-    if not real_key:
+    rk = find_order_key(orders, oid)
+    if not rk:
         await callback.answer("❌ Не найден", show_alert=True)
         return
-    order = orders[real_key]
+    order = orders[rk]
     e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
     s = method_symbol(order.get("payment_method", "uah"))
-    short = order.get("short_id", real_key[:8])
+    short = order.get("short_id", rk[:8])
     total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
 
     text = (
@@ -1367,13 +1291,13 @@ async def admin_order_detail(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(
             text,
-            reply_markup=admin_order_card_keyboard(real_key, order["status"], order["user_id"]),
+            reply_markup=admin_order_card_keyboard(rk, order["status"], order["user_id"]),
             parse_mode="HTML"
         )
     except:
         await callback.message.answer(
             text,
-            reply_markup=admin_order_card_keyboard(real_key, order["status"], order["user_id"]),
+            reply_markup=admin_order_card_keyboard(rk, order["status"], order["user_id"]),
             parse_mode="HTML"
         )
 
@@ -1419,8 +1343,8 @@ async def save_requisite(message: types.Message, state: FSMContext):
 async def admin_broadcast(message: types.Message, state: FSMContext):
     users = load_users()
     if not users:
-        return await message.answer("❌ Нет пользователей")
-    await message.answer(f"📢 Отправьте сообщение для рассылки на {len(users)} юзеров. /cancel для отмены")
+        return await message.answer("❌ Нет юзеров")
+    await message.answer(f"📢 Сообщение для рассылки на {len(users)}. /cancel — отмена")
     await state.set_state(AdminStates.waiting_for_broadcast)
 
 
@@ -1488,10 +1412,8 @@ async def admin_reject_order(callback: types.CallbackQuery):
     order = orders[rk]
     order["status"] = "rejected"
     save_orders(orders)
-
     if order.get("country_code") and order.get("session_name"):
         release_account(order["country_code"], order["session_name"])
-
     try:
         await bot.send_message(order["user_id"], f"❌ Заказ {order.get('short_id', rk)} отклонён")
     except:
@@ -1512,8 +1434,8 @@ async def admin_deliver_account(callback: types.CallbackQuery):
     if not rk:
         return
     order = orders[rk]
-    if not order.get("session_name") or not order.get("country_code"):
-        await callback.answer("❌ Заказ без склада", show_alert=True)
+    if not order.get("session_name"):
+        await callback.answer("❌ Нет склада", show_alert=True)
         return
     await deliver_to_user(order, rk)
 
@@ -1530,7 +1452,7 @@ async def admin_refund(callback: types.CallbackQuery):
     order["status"] = "refunded"
     save_orders(orders)
     try:
-        await bot.send_message(order["user_id"], f"💰 Возврат по {order.get('short_id', rk)} оформлен.")
+        await bot.send_message(order["user_id"], f"💰 Возврат по {order.get('short_id', rk)}.")
     except:
         pass
     await callback.message.edit_text(
@@ -1547,10 +1469,9 @@ async def deliver_to_user(order: dict, order_key: str):
     user_id = order["user_id"]
 
     sess_file = session_path(country_code, session_name)
-
     if not os.path.exists(sess_file):
         try:
-            await bot.send_message(user_id, "❌ Файл сессии не найден. @MaskYoY")
+            await bot.send_message(user_id, "❌ Файл не найден. @MaskYoY")
         except:
             pass
         return
@@ -1564,9 +1485,9 @@ async def deliver_to_user(order: dict, order_key: str):
                 f"🌍 {country_code.upper()}\n"
                 f"📱 {phone}\n\n"
                 f"<b>Как войти:</b>\n"
-                f"1. Открой Telegram Desktop\n"
-                f"2. Используй .session в Telethon\n"
-                f"3. Когда Telegram запросит код — нажми кнопку ниже\n\n"
+                f"1. Telegram Desktop\n"
+                f"2. Используй .session\n"
+                f"3. Когда придёт код — нажми кнопку\n\n"
                 f"<b>Код придёт автоматически сюда!</b>"
             ),
             parse_mode="HTML",
@@ -2378,28 +2299,7 @@ async def show_dashboard(target, edit=False):
         await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-# ==================== АДМИН: ПРОМОКОДЫ / УРОВНИ / РАССЫЛКИ / АНАЛИТИКА ====================
-@dp.message(F.from_user.id == ADMIN_ID, F.text == "🎟 Промокоды")
-@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_promo_dashboard")
-async def admin_promo_menu(event):
-    if isinstance(event, types.CallbackQuery):
-        await event.answer()
-        target = event.message
-        edit = True
-    else:
-        target = event
-        edit = False
-    kb = admin_promo_codes_keyboard()
-    text = "🎟 Промокоды:"
-    if edit:
-        try:
-            await target.edit_text(text, reply_markup=kb)
-        except:
-            await target.answer(text, reply_markup=kb)
-    else:
-        await target.answer(text, reply_markup=kb)
-
-
+# ==================== АДМИН: УРОВНИ / АНАЛИТИКА / ИСТОЧНИКИ ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "⭐ Уровни")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_levels_dashboard")
 async def admin_levels(event):
@@ -2440,10 +2340,7 @@ async def admin_edit_level(callback: types.CallbackQuery, state: FSMContext):
     b.button(text="🎁 Скидка", callback_data="edit_level_discount")
     b.button(text="⬅️ Назад", callback_data="admin_levels_dashboard")
     b.adjust(1)
-    await callback.message.edit_text(
-        f"Уровень {LEVEL_KEYS.get(key, key)}:",
-        reply_markup=b.as_markup()
-    )
+    await callback.message.edit_text(f"Уровень {LEVEL_KEYS.get(key, key)}:", reply_markup=b.as_markup())
 
 
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "edit_level_min")
@@ -2474,7 +2371,7 @@ async def save_level_min(message: types.Message, state: FSMContext):
     s = load_settings()
     s[f"level_{key}_min"] = v
     save_settings(s)
-    await message.answer(f"✅ Порог {LEVEL_KEYS.get(key, key)}: {v}₴", reply_markup=get_admin_reply_keyboard())
+    await message.answer(f"✅ Порог: {v}₴", reply_markup=get_admin_reply_keyboard())
     await state.clear()
 
 
@@ -2492,73 +2389,7 @@ async def save_level_disc(message: types.Message, state: FSMContext):
     s = load_settings()
     s[f"level_{key}_discount"] = v
     save_settings(s)
-    await message.answer(f"✅ Скидка {LEVEL_KEYS.get(key, key)}: {v}%", reply_markup=get_admin_reply_keyboard())
-    await state.clear()
-
-
-@dp.message(F.from_user.id == ADMIN_ID, F.text == "📢 Рассылки")
-@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_broadcasts_dashboard")
-async def admin_broadcasts(event):
-    if isinstance(event, types.CallbackQuery):
-        await event.answer()
-        target = event.message
-        edit = True
-    else:
-        target = event
-        edit = False
-    kb = admin_broadcasts_keyboard()
-    if edit:
-        try:
-            await target.edit_text("📢 Авторассылки:", reply_markup=kb)
-        except:
-            await target.answer("📢 Авторассылки:", reply_markup=kb)
-    else:
-        await target.answer("📢 Авторассылки:", reply_markup=kb)
-
-
-@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_create_broadcast_template")
-async def create_bc(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    b = InlineKeyboardBuilder()
-    for d in [3, 7, 14, 30]:
-        b.button(text=f"{d} дней", callback_data=f"broadcast_days_{d}")
-    b.adjust(2)
-    await callback.message.edit_text("Через сколько дней неактивности:", reply_markup=b.as_markup())
-    await state.set_state(AdminBroadcastTemplateStates.waiting_for_days)
-
-
-@dp.callback_query(AdminBroadcastTemplateStates.waiting_for_days, F.data.startswith("broadcast_days_"))
-async def bc_days(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    d = int(callback.data.split("_")[-1])
-    await state.update_data(broadcast_days=d)
-    await callback.message.edit_text("Введите текст рассылки (HTML):")
-    await state.set_state(AdminBroadcastTemplateStates.waiting_for_text)
-
-
-@dp.message(AdminBroadcastTemplateStates.waiting_for_text, F.text)
-async def bc_text(message: types.Message, state: FSMContext):
-    await state.update_data(broadcast_text=message.text)
-    b = InlineKeyboardBuilder()
-    b.button(text="✅ Без кнопки", callback_data="broadcast_no_button")
-    await message.answer("Добавить кнопку?", reply_markup=b.as_markup())
-    await state.set_state(AdminBroadcastTemplateStates.waiting_for_button)
-
-
-@dp.callback_query(AdminBroadcastTemplateStates.waiting_for_button, F.data == "broadcast_no_button")
-async def bc_no_button(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    data = await state.get_data()
-    bcs = load_broadcasts()
-    bid = f"bc_{data['broadcast_days']}"
-    bcs[bid] = {
-        "days_inactive": data["broadcast_days"],
-        "message_text": data["broadcast_text"],
-        "button_text": None, "button_url": None,
-        "is_active": True, "created_at": datetime.now().isoformat(),
-    }
-    save_broadcasts(bcs)
-    await callback.message.edit_text(f"✅ Рассылка настроена", reply_markup=admin_broadcasts_keyboard())
+    await message.answer(f"✅ Скидка: {v}%", reply_markup=get_admin_reply_keyboard())
     await state.clear()
 
 
@@ -2678,7 +2509,7 @@ async def admin_traffic(event):
         await target.answer(text, reply_markup=b, parse_mode="HTML")
 
 
-# ==================== АДМИН: РЕФЕРАЛЫ ====================
+# ==================== АДМИН: РЕФЕРАЛЫ / ЮЗЕРЫ / ЧАТ ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "👥 Рефералы")
 @dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_referrals_dashboard")
 async def admin_referrals(event):
@@ -2728,7 +2559,6 @@ async def save_bonus(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# ==================== АДМИН: ЮЗЕРЫ / ЧАТ ====================
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "👤 Пользователи")
 async def admin_users_list(message: types.Message):
     users = load_users()
@@ -2779,49 +2609,7 @@ async def admin_chat_send(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# ==================== ФОНОВЫЕ ЗАДАЧИ ====================
-async def auto_broadcast_scheduler():
-    while True:
-        try:
-            broadcasts = load_broadcasts()
-            users = load_users()
-            orders = load_orders()
-            now = datetime.now()
-            for bid, bc in broadcasts.items():
-                if not bc.get("is_active"):
-                    continue
-                days_inactive = bc.get("days_inactive")
-                if not days_inactive:
-                    continue
-                for uid_str, u in users.items():
-                    uid = int(uid_str)
-                    user_orders = [o for o in orders.values() if o["user_id"] == uid and o["status"] == "completed"]
-                    if not user_orders:
-                        continue
-                    last = max(user_orders, key=lambda x: x.get("completed_at", x.get("created_at", "")))
-                    try:
-                        last_dt = datetime.fromisoformat(last.get("completed_at", last["created_at"]))
-                    except:
-                        continue
-                    if (now - last_dt).days == days_inactive:
-                        sent_key = f"sent_bc_{bid}"
-                        if u.get(sent_key):
-                            continue
-                        try:
-                            kb = None
-                            if bc.get("button_text") and bc.get("button_url"):
-                                kb = InlineKeyboardBuilder().button(text=bc["button_text"], url=bc["button_url"]).as_markup()
-                            await bot.send_message(uid, bc["message_text"], reply_markup=kb, parse_mode="HTML")
-                            users[uid_str][sent_key] = datetime.now().isoformat()
-                            save_users(users)
-                            await asyncio.sleep(0.1)
-                        except:
-                            pass
-        except Exception as e:
-            logger.error(f"Scheduler: {e}")
-        await asyncio.sleep(3600)
-
-
+# ==================== ОШИБКИ ====================
 @dp.errors()
 async def error_handler(event):
     logger.error(f"Update error: {event.exception}")
@@ -2831,13 +2619,13 @@ async def error_handler(event):
 # ==================== ЗАПУСК ====================
 async def main():
     print("=" * 50)
-    print("OverPass Store Bot — Автоопределение страны")
+    print("OverPass Store Bot")
     print("=" * 50)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
 
-    # Запускаем watchers для уже проданных
+    # Запуск watchers для уже проданных аккаунтов
     if os.path.exists(ACCOUNTS_DIR):
         for c in os.listdir(ACCOUNTS_DIR):
             cd = country_dir(c)
@@ -2850,8 +2638,6 @@ async def main():
                         asyncio.create_task(start_code_watcher(c, meta["session_name"], meta["sold_to"]))
 
     print("Бот запущен!")
-    asyncio.create_task(auto_broadcast_scheduler())
-
     try:
         await dp.start_polling(bot, drop_pending_updates=True)
     except Exception as e:
