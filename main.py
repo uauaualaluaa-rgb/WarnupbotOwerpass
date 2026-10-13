@@ -16,9 +16,9 @@ from telethon.tl.types import InputPeerChannel
 
 logging.basicConfig(level=logging.WARNING)
 
-BOT_TOKEN = "8862811439:ТВОЙ_ТОКЕН"
-API_ID = 31763959
-API_HASH = "cf2d9b1236e90832a9346ec9f8f94c19"
+BOT_TOKEN = "8862811439:AAGKNCDLKgfHnhxsKoTH3CuzaLfnPb659R4"
+API_ID = 38387697
+API_HASH = "e8fb7f7163498eb28231e45071fe92c0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SESS_DIR = os.path.join(BASE_DIR, "sessions")
