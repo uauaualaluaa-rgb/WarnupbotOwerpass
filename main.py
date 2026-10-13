@@ -1,625 +1,2831 @@
 import asyncio
 import logging
+import json
 import os
-import random
-import base64
-from datetime import datetime
+import sys
+import re
+import hashlib
+import shutil
+from datetime import datetime, timedelta
+from pathlib import Path
+
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart, Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery,
+    FSInputFile
+)
 from aiogram.client.default import DefaultBotProperties
-from telethon import TelegramClient, functions
-from telethon.errors import FloodWaitError
+from aiogram.enums import ParseMode
+from telethon import TelegramClient, events
 
-logging.basicConfig(level=logging.WARNING)
-
+# ==================== КОНФИГУРАЦИЯ ====================
 BOT_TOKEN = "8862811439:AAGKNCDLKgfHnhxsKoTH3CuzaLfnPb659R4"
+ADMIN_ID = 8543473783
+CHANNEL_ID = "-1004311525622"
+STORE_CHANNEL_ID = "-1004292126045"
+
 API_ID = 38387697
 API_HASH = "e8fb7f7163498eb28231e45071fe92c0"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SESS_DIR = os.path.join(BASE_DIR, "sessions")
-AVATAR_DIR = os.path.join(BASE_DIR, "avatars")
-os.makedirs(SESS_DIR, exist_ok=True)
-os.makedirs(AVATAR_DIR, exist_ok=True)
-
-for key, value in os.environ.items():
-    if key.startswith("SESSION_") and key.endswith("_B64"):
-        name = key.replace("SESSION_", "").replace("_B64", "").lower()
-        path = os.path.join(SESS_DIR, f"{name}.session")
-        if not os.path.exists(path):
-            with open(path, "wb") as f:
-                f.write(base64.b64decode(value))
+logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
-CHANNELS = ["@durov", "@telegram", "@tginfo", "@telegramtips", "@contest", "@BotNews"]
+# ==================== ФАЙЛЫ ====================
+ORDERS_FILE = "orders.json"
+REVIEWS_FILE = "reviews.json"
+RELAY_FILE = "relay_map.json"
+REQUISITES_FILE = "requisites.json"
+USERS_FILE = "users.json"
+REFERRALS_FILE = "referrals.json"
+PROMO_CODES_FILE = "promo_codes.json"
+PROMOTIONS_FILE = "promotions.json"
+BROADCASTS_FILE = "broadcasts.json"
+TRAFFIC_SOURCES_FILE = "traffic_sources.json"
+SETTINGS_FILE = "settings.json"
+ORDER_COUNTER_FILE = "order_counter.json"
+CHAT_HISTORY_FILE = "chat_history.json"
 
-# ========== ПРОФИЛИ (20+ тем) ==========
-PROFILES = [
-    # Аниме
-    {"fn": "Sakura", "ln": "Chan", "bio": "аниме люблю больше чем людей 🌸", "un": ["sakura","anime","neko","yuki","rei"], "img": "anime"},
-    {"fn": "Kirito", "ln": "Kun", "bio": "мир мечей и виртуальных снов ⚔️", "un": ["kirito","asuna","sao"], "img": "anime"},
-    {"fn": "Naruto", "ln": "Uz", "bio": "никогда не сдаваться 🍥", "un": ["naruto","hokage","ninja"], "img": "anime"},
-    {"fn": "Levi", "ln": "Ack", "bio": "титаны не спят 🗡️", "un": ["levi","titan","ackerman"], "img": "anime"},
+ACCOUNTS_DIR = "accounts"
+TEMP_DIR = "temp_sessions"
+os.makedirs(ACCOUNTS_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # Тачки
-    {"fn": "Дмитрий", "ln": "Гонщиков", "bio": "JDM, дрифт и выхлоп 🔊", "un": ["drift","jdm","turbo","supra"], "img": "car"},
-    {"fn": "Максим", "ln": "Турбо", "bio": "BMW M5 — это не машина, это жизнь 🏎️", "un": ["bmw","m5","amg","rs6"], "img": "car"},
-    {"fn": "Никита", "ln": "Спид", "bio": "скорость — мой наркотик ⚡", "un": ["speed","race","nitro"], "img": "car"},
 
-    # Гейминг
-    {"fn": "Егор", "ln": "ProGamer", "bio": "CS2 3000 часов 🎯", "un": ["csgo","cs2","flick","headshot"], "img": "gaming"},
-    {"fn": "Даниил", "ln": "Тимплей", "bio": "Dota 2 / Valorant / CS2 🎮", "un": ["dota","val","gg"], "img": "gaming"},
+def load_json(path):
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
-    # Фото
-    {"fn": "Алексей", "ln": "Фотографов", "bio": "вижу мир через объектив 📸", "un": ["photo","shot","lens"], "img": "photo"},
-    {"fn": "Роман", "ln": "Художник", "bio": "рисую то, что вижу во сне 🎨", "un": ["art","draw","pixel"], "img": "photo"},
 
-    # Спорт
-    {"fn": "Иван", "ln": "Качков", "bio": "жим 120, тяга 150, присед 180 💪", "un": ["gym","fit","iron"], "img": "sport"},
-    {"fn": "Сергей", "ln": "Боксёров", "bio": "быстрее, выше, сильнее 🥊", "un": ["box","fight","mma","ufc"], "img": "sport"},
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-    # Музыка
-    {"fn": "Андрей", "ln": "Битмейкер", "bio": "делаю биты ночью 🎧", "un": ["beat","producer","flstudio"], "img": "music"},
-    {"fn": "Павел", "ln": "Гитарист", "bio": "рок жив 🎸", "un": ["rock","guitar","metal"], "img": "music"},
 
-    # Путешествия
-    {"fn": "Владислав", "ln": "Путешественников", "bio": "страны, города, люди ✈️", "un": ["travel","trip","world"], "img": "travel"},
+def load_orders(): return load_json(ORDERS_FILE)
+def save_orders(o): save_json(ORDERS_FILE, o)
+def load_reviews(): return load_json(REVIEWS_FILE)
+def save_reviews(r): save_json(REVIEWS_FILE, r)
+def load_relay(): return load_json(RELAY_FILE)
+def save_relay(r): save_json(RELAY_FILE, r)
+def load_requisites(): return load_json(REQUISITES_FILE)
+def save_requisites(r): save_json(REQUISITES_FILE, r)
+def load_users(): return load_json(USERS_FILE)
+def save_users(u): save_json(USERS_FILE, u)
+def load_referrals(): return load_json(REFERRALS_FILE)
+def save_referrals(r): save_json(REFERRALS_FILE, r)
+def load_promo_codes(): return load_json(PROMO_CODES_FILE)
+def save_promo_codes(p): save_json(PROMO_CODES_FILE, p)
+def load_promotions(): return load_json(PROMOTIONS_FILE)
+def save_promotions(p): save_json(PROMOTIONS_FILE, p)
+def load_broadcasts(): return load_json(BROADCASTS_FILE)
+def save_broadcasts(b): save_json(BROADCASTS_FILE, b)
+def load_traffic_sources(): return load_json(TRAFFIC_SOURCES_FILE)
+def save_traffic_sources(t): save_json(TRAFFIC_SOURCES_FILE, t)
+def load_settings(): return load_json(SETTINGS_FILE)
+def save_settings(s): save_json(SETTINGS_FILE, s)
+def load_order_counter(): return load_json(ORDER_COUNTER_FILE)
+def save_order_counter(c): save_json(ORDER_COUNTER_FILE, c)
+def load_chat_history(): return load_json(CHAT_HISTORY_FILE)
+def save_chat_history(c): save_json(CHAT_HISTORY_FILE, c)
 
-    # Техно
-    {"fn": "Максим", "ln": "Разработчиков", "bio": "код, кофе, сон (не по порядку) 💻", "un": ["dev","code","python"], "img": "tech"},
-    {"fn": "Егор", "ln": "Хакеров", "bio": "иногда ломаю, чаще чиню 🔐", "un": ["hack","cyber","sec"], "img": "tech"},
 
-    # ========== ДОКСЕРСКАЯ ==========
-    {"fn": "Даниил", "ln": "Доксер", "bio": "знаю о тебе больше, чем ты сам 🕵️", "un": ["dox","doxer","osint","intel","search"], "img": "hacker"},
-    {"fn": "Артём", "ln": "Деанон", "bio": "инфа решает всё 📁", "un": ["deanon","anon","doxbin"], "img": "hacker"},
-    {"fn": "Никита", "ln": "Пробив", "bio": "пробью любого 📞", "un": ["probit","problv","info","base"], "img": "hacker"},
+# ==================== СКЛАД ====================
+def country_dir(country: str) -> str:
+    return os.path.join(ACCOUNTS_DIR, country)
 
-    # ========== НЕФОРСКАЯ ==========
-    {"fn": "Кирилл", "ln": "Нефор", "bio": "нефор 4 life 🖤", "un": ["nefor","neform","chushpan","gopnik"], "img": "nefor"},
-    {"fn": "Егор", "ln": "Чушпан", "bio": "чё ты пёс 🐶", "un": ["4ushpan","chushpan","pav","dyadya"], "img": "nefor"},
-    {"fn": "Максим", "ln": "Гопник", "bio": "э слышь 🧢", "un": ["gopnik","gop","semki","semechki"], "img": "nefor"},
 
-    # ========== ЕМО ==========
-    {"fn": "Даниил", "ln": "Емо", "bio": "жизнь — боль 🖤🥀", "un": ["emo","emo4ka","sadboy","broken"], "img": "emo"},
-    {"fn": "Артём", "ln": "Мрачный", "bio": "тёмная сторона души 🖤", "un": ["dark","sad","alone","cry"], "img": "emo"},
-    {"fn": "Кирилл", "ln": "Печаль", "bio": "лучше быть одному ⛓️", "un": ["sad","pain","hurt","lost"], "img": "emo"},
+def session_path(country: str, session_name: str) -> str:
+    return os.path.join(country_dir(country), f"{session_name}.session")
 
-    # ========== ГОТ ==========
-    {"fn": "Роман", "ln": "Гот", "bio": "тьма и искусство 🦇", "un": ["goth","gothic","raven","crow"], "img": "goth"},
 
-    # ========== РЭП / ХИП-ХОП ==========
-    {"fn": "Иван", "ln": "Рэпер", "bio": "делаю треки на дому 🎤", "un": ["rap","trap","flow","beat"], "img": "rap"},
-    {"fn": "Сергей", "ln": "Хипхоп", "bio": "уличная культура 🧢", "un": ["hiphop","street","urban"], "img": "rap"},
+def watcher_path(country: str, session_name: str) -> str:
+    return os.path.join(country_dir(country), f"{session_name}_watcher.session")
 
-    # ========== СКЕЙТ / СТРИТ ==========
-    {"fn": "Никита", "ln": "Скейтер", "bio": "доска, улица, свобода 🛹", "un": ["skate","sk8","board","street"], "img": "skate"},
-    {"fn": "Андрей", "ln": "Стрит", "bio": "город — мой дом 🏙️", "un": ["street","urban","city","hood"], "img": "skate"},
 
-    # ========== БАРБЕР / СТИЛЬ ==========
-    {"fn": "Дмитрий", "ln": "Барбер", "bio": "стрижки для своих ✂️", "un": ["barber","cut","fade","style"], "img": "barber"},
+def meta_path(country: str, session_name: str) -> str:
+    return os.path.join(country_dir(country), f"{session_name}.json")
 
-    # ========== ГЕЙМЕРЫ РУССКИЕ ==========
-    {"fn": "Егор", "ln": "Крипер", "bio": "майнкрафт детство 🟩", "un": ["creeper","mine","mc","block"], "img": "minecraft"},
-    {"fn": "Даниил", "ln": "Зомби", "bio": "выживаю в мире блоков 🧟", "un": ["zombie","steve","alex"], "img": "minecraft"},
-]
 
-# ========== ЗАГРУЗКА АВАТАРОК ==========
-async def download_avatar(tag: str) -> str:
-    import aiohttp
-    
-    sources = {
-        "anime": [
-            "https://nekos.life/api/v2/img/neko",
-            "https://api.waifu.pics/sfw/waifu",
-            "https://api.waifu.pics/sfw/neko",
-        ],
-        "car": [
-            "https://picsum.photos/512/512?random=" + str(random.randint(1,99999)),
-            "https://source.unsplash.com/512x512/?car,auto,jdm",
-        ],
-        "gaming": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "photo": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "sport": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "music": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "travel": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "tech": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "hacker": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "nefor": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "emo": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "goth": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "rap": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "skate": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "barber": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
-        "minecraft": ["https://picsum.photos/512/512?random=" + str(random.randint(1,99999))],
+def add_account(session_src: str, country: str, phone: str, price_uah, price_stars: int):
+    os.makedirs(country_dir(country), exist_ok=True)
+    name = os.path.basename(session_src).replace(".session", "")
+    dst = session_path(country, name)
+    dst_watcher = watcher_path(country, name)
+
+    shutil.copy(session_src, dst)
+    shutil.copy(session_src, dst_watcher)
+
+    meta = {
+        "country": country,
+        "session_name": name,
+        "phone": phone,
+        "price_uah": price_uah,
+        "price_stars": price_stars,
+        "status": "available",
+        "added_at": datetime.now().isoformat(),
+        "sold_at": None,
+        "sold_to": None,
     }
-    
-    urls = sources.get(tag, ["https://picsum.photos/512/512"])
-    
-    for url in urls:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(url, timeout=10, allow_redirects=True) as resp:
-                    if resp.status == 200:
-                        ct = resp.headers.get("Content-Type", "")
-                        if "json" in ct:
-                            data = await resp.json()
-                            img_url = data.get("url") or data.get("link")
-                            if img_url:
-                                async with s.get(img_url, timeout=10) as ir:
-                                    if ir.status == 200:
-                                        b = await ir.read()
-                                        p = os.path.join(AVATAR_DIR, f"av_{random.randint(100000,999999)}.jpg")
-                                        with open(p, "wb") as f:
-                                            f.write(b)
-                                        return p
-                        elif "image" in ct:
-                            b = await resp.read()
-                            if len(b) > 1000:
-                                p = os.path.join(AVATAR_DIR, f"av_{random.randint(100000,999999)}.jpg")
-                                with open(p, "wb") as f:
-                                    f.write(b)
-                                return p
-        except Exception as e:
-            logging.warning(f"Avatar error: {e}")
+    with open(meta_path(country, name), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    return meta
+
+
+def load_meta(country: str, name: str):
+    p = meta_path(country, name)
+    if not os.path.exists(p):
+        return None
+    with open(p, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_meta(country: str, name: str, meta: dict):
+    with open(meta_path(country, name), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def all_available(country: str = None) -> list:
+    if not os.path.exists(ACCOUNTS_DIR):
+        return []
+    result = []
+    countries = [country] if country else os.listdir(ACCOUNTS_DIR)
+    for c in countries:
+        cd = country_dir(c)
+        if not os.path.isdir(cd):
             continue
+        for f in os.listdir(cd):
+            if f.endswith(".json"):
+                meta = load_meta(c, f.replace(".json", ""))
+                if meta and meta.get("status") == "available":
+                    result.append(meta)
+    return result
+
+
+def stock_count() -> dict:
+    counts = {}
+    if not os.path.exists(ACCOUNTS_DIR):
+        return counts
+    for c in os.listdir(ACCOUNTS_DIR):
+        cd = country_dir(c)
+        if not os.path.isdir(cd):
+            continue
+        counts[c] = 0
+        for f in os.listdir(cd):
+            if f.endswith(".json"):
+                meta = load_meta(c, f.replace(".json", ""))
+                if meta and meta.get("status") == "available":
+                    counts[c] += 1
+    return counts
+
+
+def reserve_account(country: str, user_id: int):
+    avail = all_available(country)
+    if not avail:
+        return None
+    acc = avail[0]
+    acc["status"] = "reserved"
+    acc["reserved_by"] = user_id
+    acc["reserved_at"] = datetime.now().isoformat()
+    save_meta(country, acc["session_name"], acc)
+    return acc
+
+
+def release_account(country: str, session_name: str):
+    meta = load_meta(country, session_name)
+    if not meta:
+        return
+    meta["status"] = "available"
+    meta.pop("reserved_by", None)
+    meta.pop("reserved_at", None)
+    save_meta(country, session_name, meta)
+
+
+def mark_sold(country: str, session_name: str, user_id: int):
+    meta = load_meta(country, session_name)
+    if not meta:
+        return
+    meta["status"] = "sold"
+    meta["sold_at"] = datetime.now().isoformat()
+    meta["sold_to"] = user_id
+    save_meta(country, session_name, meta)
+
+
+def get_user_accounts(user_id: int) -> list:
+    result = []
+    if not os.path.exists(ACCOUNTS_DIR):
+        return result
+    for c in os.listdir(ACCOUNTS_DIR):
+        cd = country_dir(c)
+        if not os.path.isdir(cd):
+            continue
+        for f in os.listdir(cd):
+            if f.endswith(".json"):
+                meta = load_meta(c, f.replace(".json", ""))
+                if meta and meta.get("sold_to") == user_id:
+                    result.append(meta)
+    return result
+
+
+# ==================== ПЕРЕХВАТ КОДОВ ====================
+active_watchers = {}
+watcher_users = {}
+
+
+async def watch_codes(session_file: str, user_id: int):
+    session_name = os.path.basename(session_file).replace(".session", "")
+    if session_name in active_watchers:
+        watcher_users[session_name] = user_id
+        return
+
+    client = TelegramClient(session_file.replace(".session", ""), API_ID, API_HASH)
+
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            logger.warning(f"Watcher: {session_name} not authorized")
+            return
+
+        @client.on(events.NewMessage(from_users=[777000]))
+        async def handler(event):
+            text = event.message.text or ""
+            match = re.search(r'\b(\d{5})\b', text)
+            if match:
+                code = match.group(1)
+                target = watcher_users.get(session_name)
+                if target:
+                    try:
+                        await bot.send_message(
+                            chat_id=target,
+                            text=(
+                                f"🔑 <b>КОД ПОДТВЕРЖДЕНИЯ</b>\n\n"
+                                f"<code>{code}</code>\n\n"
+                                f"Введите его в Telegram сейчас же!"
+                            ),
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.error(f"Send code error: {e}")
+
+        active_watchers[session_name] = client
+        watcher_users[session_name] = user_id
+        logger.info(f"Watcher started: {session_name}")
+        await client.run_until_disconnected()
+    except Exception as e:
+        logger.error(f"Watcher error {session_name}: {e}")
+    finally:
+        active_watchers.pop(session_name, None)
+
+
+async def start_code_watcher(country: str, session_name: str, user_id: int):
+    sess = watcher_path(country, session_name)
+    if not os.path.exists(sess):
+        sess = session_path(country, session_name)
+    await watch_codes(sess, user_id)
+
+
+# ==================== НАСТРОЙКИ ====================
+DEFAULT_SETTINGS = {
+    "referral_bonus_percent": 5.0,
+    "level_bronze_min": 0, "level_bronze_discount": 0,
+    "level_silver_min": 500, "level_silver_discount": 3,
+    "level_gold_min": 1500, "level_gold_discount": 5,
+    "level_platinum_min": 3000, "level_platinum_discount": 7,
+    "level_vip_min": 5000, "level_vip_discount": 10,
+}
+if not os.path.exists(SETTINGS_FILE):
+    save_settings(DEFAULT_SETTINGS)
+
+
+def get_setting(key, default=None):
+    settings = load_settings()
+    return settings.get(key, DEFAULT_SETTINGS.get(key, default))
+
+
+LEVEL_KEYS = {"bronze": "Бронза", "silver": "Серебро", "gold": "Золото", "platinum": "Платина", "vip": "VIP"}
+
+
+# ==================== ПОЛЬЗОВАТЕЛИ ====================
+async def add_user(user_id, username=None, full_name=None, ref_code=None):
+    users = load_users()
+    referrals = load_referrals()
+    key = str(user_id)
+    is_new = key not in users
+
+    if is_new:
+        users[key] = {
+            "user_id": user_id, "username": username, "full_name": full_name,
+            "first_seen": datetime.now().isoformat(),
+            "last_active": datetime.now().isoformat(),
+            "referred_by": None, "referral_code": None,
+            "total_spent": 0.0, "orders_count": 0, "traffic_source": None,
+        }
+
+        if ref_code and ref_code.startswith("ref_"):
+            actual = ref_code[4:]
+            for rid, rdata in referrals.items():
+                if rdata.get("referral_code") == actual:
+                    users[key]["referred_by"] = int(rid)
+                    rdata.setdefault("referrals_list", []).append({
+                        "user_id": user_id, "username": username,
+                        "date": datetime.now().isoformat(),
+                        "first_purchase_done": False,
+                    })
+                    break
+
+        if ref_code and not ref_code.startswith("ref_"):
+            users[key]["traffic_source"] = ref_code
+            sources = load_traffic_sources()
+            if ref_code not in sources:
+                sources[ref_code] = {
+                    "total_visits": 0, "total_registrations": 0,
+                    "total_purchases": 0, "total_revenue": 0.0,
+                    "created_at": datetime.now().isoformat(),
+                }
+            sources[ref_code]["total_visits"] += 1
+            sources[ref_code]["total_registrations"] += 1
+            save_traffic_sources(sources)
+
+        own_code = hashlib.md5(f"{user_id}_ref_salt".encode()).hexdigest()[:8].upper()
+        users[key]["referral_code"] = own_code
+        referrals.setdefault(key, {
+            "user_id": user_id, "referral_code": own_code,
+            "referrals_list": [], "total_earned": 0.0,
+        })
+        save_referrals(referrals)
+        save_users(users)
+        return True
+
+    users[key]["last_active"] = datetime.now().isoformat()
+    if username:
+        users[key]["username"] = username
+    if full_name:
+        users[key]["full_name"] = full_name
+
+    own_code = users[key].get("referral_code")
+    if not own_code:
+        own_code = hashlib.md5(f"{user_id}_ref_salt".encode()).hexdigest()[:8].upper()
+        users[key]["referral_code"] = own_code
+
+    referrals.setdefault(key, {
+        "user_id": user_id, "referral_code": own_code,
+        "referrals_list": [], "total_earned": 0.0,
+    })
+    save_referrals(referrals)
+    save_users(users)
+    return False
+
+
+DEFAULT_REQUISITES = {
+    "uah": "💳 Карта Моно: 4874 0700 2513 7454",
+    "stars": "⭐ Отправьте звёзды в ЛС: @MaskYoY",
+    "nft": "🖼 NFT оплата в ЛС: @MaskYoY",
+}
+if not os.path.exists(REQUISITES_FILE):
+    save_requisites(DEFAULT_REQUISITES)
+
+
+def get_requisites(method):
+    req = load_requisites()
+    return req.get(method, DEFAULT_REQUISITES.get(method, "Уточните у продавца"))
+
+
+# ==================== КАТАЛОГ ====================
+CATEGORIES = {
+    "regular": {
+        "name": "📞 ОБЫЧНЫЕ НОМЕРА",
+        "products": {
+            "🇲🇲 Мьянма (+95)": {"uah": 30, "stars": 40, "emoji": "🇲🇲", "code": "95"},
+            "🇺🇸 США (+1)": {"uah": 45, "stars": 65, "emoji": "🇺🇸", "code": "1"},
+            "🇨🇴 Колумбия (+57)": {"uah": 45, "stars": 65, "emoji": "🇨🇴", "code": "57"},
+            "🇧🇩 Бангладеш (+880)": {"uah": 45, "stars": 65, "emoji": "🇧🇩", "code": "880"},
+            "🇫🇷 Франция (+33)": {"uah": 75, "stars": 100, "emoji": "🇫🇷", "code": "33"},
+            "🇧🇷 Бразилия (+55)": {"uah": 75, "stars": 100, "emoji": "🇧🇷", "code": "55"},
+            "🇺🇿 Узбекистан (+998)": {"uah": 75, "stars": 100, "emoji": "🇺🇿", "code": "998"},
+            "🇹🇭 Таиланд (+66)": {"uah": 80, "stars": 100, "emoji": "🇹🇭", "code": "66"},
+            "🇬🇧 Великобритания (+44)": {"uah": 120, "stars": 115, "emoji": "🇬🇧", "code": "44"},
+            "🇺🇦 Украина (+380)": {"uah": 150, "stars": 150, "emoji": "🇺🇦", "code": "380"},
+            "🇧🇾 Беларусь (+375)": {"uah": 150, "stars": 200, "emoji": "🇧🇾", "code": "375"},
+            "🇰🇿 Казахстан (+7)": {"uah": 150, "stars": 200, "emoji": "🇰🇿", "code": "77"},
+            "🇵🇱 Польша (+48)": {"uah": 150, "stars": 200, "emoji": "🇵🇱", "code": "48"},
+            "🇷🇺 Россия (+7)": {"uah": 150, "stars": 200, "emoji": "🇷🇺", "code": "7"},
+            "🇩🇪 Германия (+49)": {"uah": 150, "stars": 200, "emoji": "🇩🇪", "code": "49"},
+        },
+    },
+    "premium": {
+        "name": "⭐️ НОМЕРА С TELEGRAM PREMIUM",
+        "products": {
+            "🇺🇸 США (+1)": {"uah": 180, "stars": 250, "emoji": "🇺🇸", "code": "1"},
+            "🇨🇦 Канада (+1)": {"uah": 180, "stars": 250, "emoji": "🇨🇦", "code": "1"},
+            "🇺🇿 Узбекистан (+998)": {"uah": 350, "stars": 400, "emoji": "🇺🇿", "code": "998"},
+            "🇺🇦 Украина (+380)": {"uah": 350, "stars": 400, "emoji": "🇺🇦", "code": "380"},
+            "🇰🇿 Казахстан (+7)": {"uah": 400, "stars": 500, "emoji": "🇰🇿", "code": "77"},
+            "🇩🇪 Германия (+49)": {"uah": 400, "stars": 500, "emoji": "🇩🇪", "code": "49"},
+        },
+    },
+    "physical": {
+        "name": "☎️ ФИЗ НОМЕРА TELEGRAM",
+        "products": {
+            "🇺🇸 США (+1)": {"uah": 100, "stars": 150, "emoji": "🇺🇸", "code": "1"},
+            "🇺🇦 Украина (+380)": {"uah": 200, "stars": 300, "emoji": "🇺🇦", "code": "380"},
+            "🇺🇿 Узбекистан (+998)": {"uah": 100, "stars": 150, "emoji": "🇺🇿", "code": "998"},
+            "🇨🇴 Колумбия (+57)": {"uah": 100, "stars": 150, "emoji": "🇨🇴", "code": "57"},
+            "🇹🇭 Таиланд (+66)": {"uah": 120, "stars": 175, "emoji": "🇹🇭", "code": "66"},
+            "🇫🇷 Франция (+33)": {"uah": 150, "stars": 200, "emoji": "🇫🇷", "code": "33"},
+            "🇰🇿 Казахстан (+77)": {"uah": 200, "stars": 300, "emoji": "🇰🇿", "code": "77"},
+            "🇭🇺 Венгрия (+36)": {"uah": 200, "stars": 300, "emoji": "🇭🇺", "code": "36"},
+            "🇬🇱 Гренландия (+299)": {"uah": 250, "stars": 350, "emoji": "🇬🇱", "code": "299"},
+            "🇵🇱 Польша (+48)": {"uah": 250, "stars": 350, "emoji": "🇵🇱", "code": "48"},
+        },
+    },
+}
+
+
+# ==================== FSM ====================
+class ReviewStates(StatesGroup):
+    waiting_for_stars = State()
+    waiting_for_photo_or_skip = State()
+    waiting_for_text = State()
+
+
+class OrderStates(StatesGroup):
+    waiting_for_category = State()
+    waiting_for_quantity = State()
+    waiting_for_custom_quantity = State()
+    waiting_for_payment_method = State()
+    waiting_for_confirmation = State()
+
+
+class CheckoutPromoStates(StatesGroup):
+    waiting_for_promo_code = State()
+
+
+class AdminStates(StatesGroup):
+    waiting_for_phone = State()
+    waiting_for_code = State()
+    waiting_for_requisites_edit = State()
+    waiting_for_broadcast = State()
+
+
+class AdminStockStates(StatesGroup):
+    waiting_for_session = State()
+    waiting_for_country = State()
+    waiting_for_phone = State()
+    waiting_for_price_uah = State()
+    waiting_for_price_stars = State()
+
+
+class AdminPromoStates(StatesGroup):
+    waiting_for_promo_code = State()
+    waiting_for_discount_type = State()
+    waiting_for_discount_value = State()
+    waiting_for_max_uses = State()
+    waiting_for_expires_date = State()
+
+
+class AdminPromotionStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_description = State()
+    waiting_for_products = State()
+    waiting_for_new_prices = State()
+    waiting_for_duration = State()
+
+
+class AdminBroadcastTemplateStates(StatesGroup):
+    waiting_for_days = State()
+    waiting_for_text = State()
+    waiting_for_button = State()
+
+
+class AdminLevelStates(StatesGroup):
+    waiting_for_min_spent = State()
+    waiting_for_discount = State()
+
+
+class AdminReferralSettingsStates(StatesGroup):
+    waiting_for_bonus_percent = State()
+
+
+class AdminChatStates(StatesGroup):
+    waiting_for_message = State()
+
+
+class SupportStates(StatesGroup):
+    chatting = State()
+
+
+class PromoStates(StatesGroup):
+    waiting_for_promo_code = State()
+
+
+STATUS_CONFIG = {
+    "awaiting_payment": ("⏳", "Ожидает оплаты"),
+    "paid": ("💳", "Оплачен"),
+    "completed": ("✅", "Выполнен"),
+    "rejected": ("❌", "Отклонен"),
+    "refunded": ("💰", "Возврат"),
+}
+
+
+def method_label(m):
+    return {"uah": "Гривны (₴)", "stars": "Telegram Stars (⭐)", "nft": "NFT (TON)"}.get(m, m)
+
+
+def method_symbol(m):
+    return {"uah": "₴", "stars": "⭐", "nft": "💎"}.get(m, "")
+
+
+def generate_short_order_id():
+    counter = load_order_counter()
+    current = counter.get("current", 0)
+    new_id = current + 1
+    counter["current"] = new_id
+    save_order_counter(counter)
+    return f"#{new_id:06d}"
+
+
+def find_order_key(orders, order_id):
+    if not order_id:
+        return None
+    order_id = str(order_id).strip()
+    if order_id in orders:
+        return order_id
+    clean = order_id.replace("#", "").strip()
+    for key, order in orders.items():
+        if str(key).replace("#", "").strip() == clean:
+            return key
+        if str(order.get("short_id", "")).replace("#", "").strip() == clean:
+            return key
     return None
 
-def get_country_from_phone(phone: str) -> str:
-    codes = {
-        "+7": "Россия/Казахстан", "+375": "Беларусь", "+380": "Украина",
-        "+77": "Казахстан", "+996": "Киргизия", "+998": "Узбекистан",
-        "+994": "Азербайджан", "+995": "Грузия", "+373": "Молдова",
-        "+371": "Латвия", "+370": "Литва", "+372": "Эстония",
-        "+48": "Польша", "+49": "Германия", "+1": "США/Канада",
-        "+44": "Великобритания", "+90": "Турция",
+
+def get_user_level(user_id):
+    users = load_users()
+    user = users.get(str(user_id), {})
+    total_spent = user.get("total_spent", 0)
+    levels = [
+        ("VIP", get_setting("level_vip_min", 5000), get_setting("level_vip_discount", 10), "👑"),
+        ("Платина", get_setting("level_platinum_min", 3000), get_setting("level_platinum_discount", 7), "💎"),
+        ("Золото", get_setting("level_gold_min", 1500), get_setting("level_gold_discount", 5), "🥇"),
+        ("Серебро", get_setting("level_silver_min", 500), get_setting("level_silver_discount", 3), "🥈"),
+        ("Бронза", get_setting("level_bronze_min", 0), get_setting("level_bronze_discount", 0), "🥉"),
+    ]
+    for name, min_spent, discount, emoji in levels:
+        if total_spent >= min_spent:
+            return {"name": name, "discount": discount, "emoji": emoji, "min_spent": min_spent}
+    return {"name": "Бронза", "discount": 0, "emoji": "🥉", "min_spent": 0}
+
+
+async def process_referral_bonus(referrer_id, referred_id, order_total):
+    try:
+        order_total = float(order_total)
+    except:
+        return
+    if order_total <= 0:
+        return
+    referrals = load_referrals()
+    rkey = str(referrer_id)
+    if rkey not in referrals:
+        return
+    rdata = referrals[rkey]
+    rdata.setdefault("referrals_list", [])
+    users = load_users()
+    referred = users.get(str(referred_id), {})
+    if referred.get("orders_count", 0) > 1:
+        return
+    for ref in rdata["referrals_list"]:
+        if ref.get("user_id") == referred_id and ref.get("bonus_promo_code"):
+            return
+    bonus_percent = get_setting("referral_bonus_percent", 5.0)
+    bonus_amount = round(order_total * (bonus_percent / 100), 2)
+    if bonus_amount <= 0:
+        return
+    code = "REF" + hashlib.md5(f"{referrer_id}_{referred_id}_{datetime.now().timestamp()}".encode()).hexdigest()[:8].upper()
+    promo_codes = load_promo_codes()
+    promo_codes[code] = {
+        "code": code, "discount_type": "fixed", "discount_value": bonus_amount,
+        "max_uses": 1, "current_uses": 0,
+        "expires_at": (datetime.now() + timedelta(days=30)).isoformat(),
+        "is_active": True, "created_at": datetime.now().isoformat(),
+        "description": f"Реферальный бонус за покупку {referred_id}",
     }
-    if not phone:
-        return "Неизвестно"
-    for code, country in sorted(codes.items(), key=lambda x: -len(x[0])):
-        if phone.startswith(code):
-            return country
-    return "Неизвестно"
-
-def build_username(profile: dict) -> str:
-    base = random.choice(profile["un"])
-    suffix = random.choice([
-        str(random.randint(10, 999)),
-        str(random.randint(1000, 9999)),
-        "_" + str(random.randint(10, 99)),
-        str(random.randint(10, 99)) + "x",
-        "off", "real", "pro", "x", "xx", "gg", "228", "1337",
-    ])
-    return f"{base}{suffix}"
-
-# ========== ПРОВЕРКА ВАЛИДНОСТИ ==========
-async def validate_session(session_name: str) -> dict:
-    """
-    Проверяет сессию БЕЗ изменений:
-    - подключение
-    - авторизация
-    - аккаунт не забанен
-    - аккаунт не заморожен
-    """
-    path = os.path.join(SESS_DIR, session_name)
-    client = TelegramClient(path, API_ID, API_HASH)
-    result = {"session": session_name, "valid": False}
-    
+    save_promo_codes(promo_codes)
+    for ref in rdata["referrals_list"]:
+        if ref.get("user_id") == referred_id:
+            ref["first_purchase_done"] = True
+            ref["bonus_amount"] = bonus_amount
+            ref["bonus_promo_code"] = code
+            break
+    rdata["total_earned"] = rdata.get("total_earned", 0) + bonus_amount
+    save_referrals(referrals)
     try:
-        await client.connect()
-        
-        if not await client.is_user_authorized():
-            result["error"] = "NOT_AUTHORIZED"
-            return result
-        
-        me = await client.get_me()
-        
-        if me is None:
-            result["error"] = "NO_ME"
-            return result
-        
-        # Проверка на бан/заморозку
-        try:
-            full = await client(functions.users.GetFullUserRequest(me.id))
-            if hasattr(full, 'full_user') and full.full_user:
-                if getattr(full.full_user, 'blocked', False):
-                    result["error"] = "ACCOUNT_BLOCKED"
-                    return result
-        except Exception:
-            pass
-        
-        result.update({
-            "valid": True,
-            "phone": me.phone,
-            "user_id": me.id,
-            "first_name": me.first_name or "",
-            "username": me.username or "",
-            "premium": getattr(me, 'premium', False),
-            "country": get_country_from_phone(me.phone),
-        })
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {str(e)[:100]}"
-    finally:
-        try:
-            await client.disconnect()
-        except:
-            pass
-    
-    return result
-
-# ========== ПРОГРЕВ ==========
-async def setup_profile(client: TelegramClient, profile: dict):
-    try:
-        await client(functions.account.UpdateProfileRequest(
-            first_name=profile["fn"], last_name=profile["ln"]
-        ))
-        await asyncio.sleep(0.5)
-        
-        await client(functions.account.UpdateProfileRequest(about=profile["bio"]))
-        await asyncio.sleep(0.5)
-        
-        avatar_path = await download_avatar(profile["img"])
-        if avatar_path and os.path.exists(avatar_path):
-            try:
-                await client(functions.photos.UploadProfilePhotoRequest(
-                    file=await client.upload_file(avatar_path)
-                ))
-            except Exception as e:
-                logging.warning(f"Avatar upload: {e}")
-            finally:
-                try:
-                    os.remove(avatar_path)
-                except:
-                    pass
-        
-        username = None
-        for _ in range(10):
-            u = build_username(profile)
-            try:
-                await client(functions.account.UpdateUsernameRequest(username=u))
-                username = u
-                break
-            except:
-                continue
-        
-        return profile["fn"], profile["ln"], username, profile["bio"]
-    except Exception as e:
-        logging.error(f"Setup error: {e}")
-        return None, None, None, None
-
-async def subscribe_channels(client: TelegramClient):
-    count = 0
-    for ch in CHANNELS:
-        try:
-            await client(functions.channels.JoinChannelRequest(channel=ch))
-            count += 1
-            await asyncio.sleep(random.randint(1, 3))
-        except FloodWaitError as e:
-            await asyncio.sleep(e.seconds)
-        except:
-            pass
-    return count
-
-async def warmup_account(session_name: str, profile: dict, me):
-    path = os.path.join(SESS_DIR, session_name)
-    client = TelegramClient(path, API_ID, API_HASH)
-    result = {"session": session_name, "success": False}
-    
-    try:
-        await client.connect()
-        
-        fn, ln, un, bio = await setup_profile(client, profile)
-        subs = await subscribe_channels(client)
-        
-        result.update({
-            "success": True,
-            "phone": me.phone,
-            "user_id": me.id,
-            "first_name": fn or me.first_name,
-            "last_name": ln or "",
-            "username": un,
-            "country": get_country_from_phone(me.phone),
-            "bio": bio,
-            "subs": subs,
-            "theme": profile["img"],
-        })
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {str(e)[:100]}"
-    finally:
-        try:
-            await client.disconnect()
-        except:
-            pass
-    return result
-
-warmup_stats = {"success": 0, "failed": 0, "invalid": 0, "results": [], "invalid_list": []}
-
-async def run_warmup(chat_id: int, status_msg: types.Message):
-    all_sessions = [f for f in os.listdir(SESS_DIR) if f.endswith(".session")]
-    if not all_sessions:
-        return await status_msg.edit_text("❌ Нет сессий.")
-    
-    total = len(all_sessions)
-    warmup_stats.update({"success": 0, "failed": 0, "invalid": 0, "results": [], "invalid_list": []})
-    
-    await status_msg.edit_text(
-        f"🔍 <b>ШАГ 1: Проверка валидности</b>\n\n"
-        f"📁 Сессий: {total}\n"
-        f"⏳ Проверяю..."
-    )
-    
-    # ШАГ 1: Проверка валидности (параллельно 10)
-    sem_check = asyncio.Semaphore(10)
-    valid_sessions = []
-    checked = 0
-    
-    async def check_worker(session_file):
-        nonlocal checked
-        async with sem_check:
-            r = await validate_session(session_file)
-            checked += 1
-            if r.get("valid"):
-                valid_sessions.append(r)
-            else:
-                warmup_stats["invalid"] += 1
-                warmup_stats["invalid_list"].append(r)
-            try:
-                await status_msg.edit_text(
-                    f"🔍 <b>ШАГ 1: Проверка</b>\n\n"
-                    f"⏳ Проверено: {checked}/{total}\n"
-                    f"✅ Валидных: {len(valid_sessions)}\n"
-                    f"❌ Невалидных: {warmup_stats['invalid']}"
-                )
-            except:
-                pass
-    
-    await asyncio.gather(*[check_worker(s) for s in all_sessions])
-    
-    if not valid_sessions:
-        return await status_msg.edit_text(
-            f"❌ <b>Нет валидных сессий</b>\n\n"
-            f"📁 Всего: {total}\n"
-            f"❌ Невалидных: {warmup_stats['invalid']}"
+        await bot.send_message(
+            chat_id=referrer_id,
+            text=(f"🎁 Вы получили реферальный бонус!\n"
+                  f"Ваш реферал совершил первую покупку.\n"
+                  f"Сумма бонуса: {bonus_amount:.2f} грн\n\n"
+                  f"Ваш промокод: <code>{code}</code>\n"
+                  f"Промокод одноразовый и действует 30 дней."),
+            parse_mode="HTML",
         )
-    
-    # ШАГ 2: Прогрев валидных
-    await status_msg.edit_text(
-        f"✅ <b>ШАГ 1 завершён</b>\n\n"
-        f"✅ Валидных: {len(valid_sessions)}\n"
-        f"❌ Невалидных: {warmup_stats['invalid']}\n\n"
-        f"🔥 <b>ШАГ 2: Прогрев начат...</b>"
-    )
-    
-    sem = asyncio.Semaphore(8)
-    processed = 0
-    
-    async def warm_worker(item, i):
-        nonlocal processed
-        async with sem:
-            profile = random.choice(PROFILES)
-            r = await warmup_account(item["session"], profile, type('Me', (), {
-                'phone': item["phone"], 'id': item["user_id"], 'first_name': item["first_name"]
-            })())
-            warmup_stats["results"].append(r)
-            if r.get("success"):
-                warmup_stats["success"] += 1
-            else:
-                warmup_stats["failed"] += 1
-            processed += 1
-            try:
-                icon = "✅" if r.get("success") else "❌"
-                theme_icons = {
-                    "anime":"🌸","car":"🏎️","gaming":"🎮","photo":"📸","sport":"💪",
-                    "music":"🎸","travel":"✈️","tech":"💻","hacker":"🕵️","nefor":"🧢",
-                    "emo":"🖤","goth":"🦇","rap":"🎤","skate":"🛹","barber":"✂️","minecraft":"🟩",
-                }
-                theme = theme_icons.get(r.get("theme",""), "👤")
-                await status_msg.edit_text(
-                    f"🔥 <b>Прогрев {processed}/{len(valid_sessions)}</b>\n\n"
-                    f"{icon} {item['session']}\n"
-                    f"{theme} {r.get('first_name','—')} {r.get('last_name','')}\n"
-                    f"🌍 {r.get('country','—')}\n"
-                    f"🆔 @{r.get('username','—')}\n"
-                    f"📝 {r.get('bio','—')[:40]}\n\n"
-                    f"✅ {warmup_stats['success']} | ❌ {warmup_stats['failed']}"
-                )
-            except:
-                pass
-    
-    await asyncio.gather(*[warm_worker(s, i) for i, s in enumerate(valid_sessions, 1)])
-    
-    # ФИНАЛЬНЫЙ ОТЧЁТ
-    success = [r for r in warmup_stats["results"] if r.get("success")]
-    
-    report = f"<b>✅ ПРОГРЕВ ЗАВЕРШЁН</b>\n\n"
-    report += f"📊 Успешно: <b>{len(success)}</b>\n"
-    report += f"❌ Ошибок прогрева: <b>{warmup_stats['failed']}</b>\n"
-    report += f"🚫 Невалидных сессий: <b>{warmup_stats['invalid']}</b>\n\n"
-    
-    if success:
-        icons = {
-            "anime":"🌸","car":"🏎️","gaming":"🎮","photo":"📸","sport":"💪",
-            "music":"🎸","travel":"✈️","tech":"💻","hacker":"🕵️","nefor":"🧢",
-            "emo":"🖤","goth":"🦇","rap":"🎤","skate":"🛹","barber":"✂️","minecraft":"🟩",
+    except:
+        pass
+
+
+def update_traffic_source_stats(source_name, purchases=0, revenue=0.0):
+    if not source_name:
+        return
+    try:
+        revenue = float(revenue)
+    except:
+        revenue = 0.0
+    sources = load_traffic_sources()
+    if source_name not in sources:
+        sources[source_name] = {
+            "total_visits": 0, "total_registrations": 0,
+            "total_purchases": 0, "total_revenue": 0.0,
+            "created_at": datetime.now().isoformat(),
         }
-        themes = {}
-        for r in success:
-            themes.setdefault(r.get("theme","other"), []).append(r)
-        report += "<b>🎨 По темам:</b>\n"
-        for t, accs in sorted(themes.items(), key=lambda x: -len(x[1])):
-            report += f"{icons.get(t,'👤')} {t}: {len(accs)}\n"
-        
-        report += "\n<b>🌍 По странам:</b>\n"
-        countries = {}
-        for r in success:
-            countries.setdefault(r["country"], []).append(r)
-        for c, accs in sorted(countries.items(), key=lambda x: -len(x[1])):
-            report += f"<b>{c}</b> — {len(accs)}\n"
-        
-        report += "\n<b>📋 ВСЕ АККАУНТЫ:</b>\n"
-        for r in success:
-            un = f"@{r['username']}" if r.get("username") else "—"
-            report += f"• {r.get('first_name','')} {r.get('last_name','')} | {un} | +{r.get('phone','')} | {r.get('country','')}\n"
-    
-    failed = [r for r in warmup_stats["results"] if not r.get("success")]
-    if failed:
-        report += "\n<b>❌ Ошибки прогрева:</b>\n"
-        for r in failed[:10]:
-            report += f"• {r['session']}: {r.get('error','?')[:70]}\n"
-    
-    if warmup_stats["invalid_list"]:
-        report += "\n<b>🚫 Невалидные сессии:</b>\n"
-        for r in warmup_stats["invalid_list"][:15]:
-            report += f"• {r['session']}: {r.get('error','?')[:60]}\n"
-    
-    for i in range(0, len(report), 4000):
-        await bot.send_message(chat_id, report[i:i+4000], parse_mode=ParseMode.HTML)
+    sources[source_name]["total_purchases"] += purchases
+    sources[source_name]["total_revenue"] += revenue
+    save_traffic_sources(sources)
 
-@dp.message(Command("start"))
+
+async def check_subscription(user_id):
+    try:
+        member = await bot.get_chat_member(chat_id=STORE_CHANNEL_ID, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
+
+async def schedule_reminder(order_id, delay_seconds=300):
+    await asyncio.sleep(delay_seconds)
+    orders = load_orders()
+    real_key = find_order_key(orders, order_id)
+    if not real_key:
+        return
+    order = orders[real_key]
+    if order["status"] == "completed" and not order.get("reviewed") and not order.get("reminder_sent"):
+        order["reminder_sent"] = True
+        save_orders(orders)
+        try:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="⭐ Оставить отзыв", callback_data=f"leave_review_{real_key}")
+            kb.button(text="📋 Мои заказы", callback_data="my_orders")
+            kb.adjust(1)
+            await bot.send_message(
+                chat_id=order["user_id"],
+                text=f"👋 Напоминаем про отзыв по заказу {order.get('short_id', real_key)}.",
+                reply_markup=kb.as_markup(),
+            )
+        except:
+            pass
+
+
+# ==================== КЛАВИАТУРЫ ====================
+def get_main_reply_keyboard():
+    b = ReplyKeyboardBuilder()
+    b.row(KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="💬 Отзывы"))
+    b.row(KeyboardButton(text="📋 Мои заказы"), KeyboardButton(text="📦 Мои аккаунты"))
+    b.row(KeyboardButton(text="❓ Частые вопросы"), KeyboardButton(text="📢 Наш Канал"))
+    b.row(KeyboardButton(text="👤 Профиль"), KeyboardButton(text="👥 Рефералы"))
+    b.row(KeyboardButton(text="🎟 Промокод"))
+    return b.as_markup(resize_keyboard=True)
+
+
+def get_admin_reply_keyboard():
+    b = ReplyKeyboardBuilder()
+    b.row(KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📋 Все заказы"))
+    b.row(KeyboardButton(text="⏳ Ожидают оплаты"), KeyboardButton(text="✅ Выполненные"))
+    b.row(KeyboardButton(text="📦 Склад"), KeyboardButton(text="💰 Реквизиты"))
+    b.row(KeyboardButton(text="📢 Рассылка"), KeyboardButton(text="👤 Пользователи"))
+    b.row(KeyboardButton(text="📈 Панель управления"), KeyboardButton(text="🏠 Главное меню"))
+    b.row(KeyboardButton(text="🔥 Акции"), KeyboardButton(text="🎟 Промокоды"))
+    b.row(KeyboardButton(text="⭐ Уровни"), KeyboardButton(text="👥 Рефералы"))
+    b.row(KeyboardButton(text="📢 Рассылки"), KeyboardButton(text="📊 Аналитика"))
+    b.row(KeyboardButton(text="🔗 Источники"))
+    return b.as_markup(resize_keyboard=True)
+
+
+def subscribe_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📢 Подписаться на Магазин", url="http://t.me/owerpass_store")
+    kb.button(text="✅ Я подписался", callback_data="check_sub")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def main_menu_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛍 Каталог", callback_data="menu_catalog")
+    kb.button(text="📋 Мои заказы", callback_data="my_orders")
+    kb.button(text="📦 Мои аккаунты", callback_data="my_accounts")
+    kb.button(text="💬 Отзывы", callback_data="menu_reviews")
+    kb.button(text="👤 Профиль", callback_data="profile_menu")
+    kb.button(text="👥 Рефералы", callback_data="referral_menu")
+    kb.button(text="🎟 Промокод", callback_data="promo_menu")
+    kb.button(text="📢 Наш Канал", url="http://t.me/owerpass_store")
+    kb.adjust(2, 2, 2, 2)
+    return kb.as_markup()
+
+
+def catalog_keyboard():
+    kb = InlineKeyboardBuilder()
+    for k, v in CATEGORIES.items():
+        kb.button(text=v["name"], callback_data=f"cat_{k}")
+    kb.button(text="⬅️ Назад", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def category_products_keyboard(category):
+    kb = InlineKeyboardBuilder()
+    counts = stock_count()
+
+    for product_name, price_data in CATEGORIES[category]["products"].items():
+        code = price_data.get("code", "")
+        in_stock = counts.get(code, 0)
+
+        if in_stock > 0:
+            display = f"{product_name} — {in_stock} шт. | {price_data['uah']}₴ / {price_data['stars']}⭐"
+            cb = f"product_{category}_{code}"
+        else:
+            display = f"❌ {product_name} — НЕТ В НАЛИЧИИ"
+            cb = "out_of_stock"
+
+        kb.button(text=display, callback_data=cb)
+
+    kb.button(text="⬅️ В каталог", callback_data="menu_catalog")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def quantity_keyboard():
+    kb = InlineKeyboardBuilder()
+    for i in range(1, 6):
+        kb.button(text=f"{i} шт.", callback_data=f"qty_{i}")
+    kb.button(text="❌ Отмена", callback_data="main_menu")
+    kb.adjust(5, 1)
+    return kb.as_markup()
+
+
+def payment_method_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⭐ Оплатить звёздами", callback_data="pay_stars")
+    kb.button(text="💳 Оплатить гривнами", callback_data="pay_uah")
+    kb.button(text="❌ Отмена", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def confirm_order_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Подтвердить заказ", callback_data="confirm_order")
+    kb.button(text="🎟 Применить промокод", callback_data="apply_promo_at_checkout")
+    kb.button(text="❌ Отмена", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def awaiting_payment_keyboard(order_id):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💬 Написать продавцу", url="https://t.me/MaskYoY")
+    kb.button(text="🆘 Написать в боте", callback_data=f"support_{order_id}")
+    kb.button(text="📋 Мои заказы", callback_data="my_orders")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def user_number_actions_keyboard(order_id):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔑 Запросить код", callback_data=f"request_code_{order_id}")
+    kb.button(text="🆘 Написать в боте", callback_data=f"support_{order_id}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def user_order_actions_keyboard(order_id):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⭐ Оставить отзыв", callback_data=f"leave_review_{order_id}")
+    kb.button(text="🔄 Запросить замену", callback_data=f"user_replace_{order_id}")
+    kb.button(text="💰 Запросить возврат", callback_data=f"user_refund_{order_id}")
+    kb.button(text="📋 Все заказы", callback_data="my_orders")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def reviews_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👀 Посмотреть отзывы", url="https://t.me/owerpass_repa")
+    kb.button(text="⬅️ Назад", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def stars_keyboard():
+    kb = InlineKeyboardBuilder()
+    for i in range(1, 6):
+        kb.button(text="⭐" * i, callback_data=f"stars_{i}")
+    kb.adjust(5)
+    return kb.as_markup()
+
+
+def review_photo_skip_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⏩ Пропустить фото", callback_data="skip_photo")
+    kb.button(text="❌ Отмена", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def moderation_keyboard(review_id):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Одобрить", callback_data=f"approve_{review_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"reject_{review_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def profile_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Мои аккаунты", callback_data="my_accounts")
+    kb.button(text="👥 Рефералы", callback_data="referral_menu")
+    kb.button(text="📋 Мои заказы", callback_data="my_orders")
+    kb.button(text="⬅️ Главное меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def referral_menu_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Моя статистика", callback_data="referral_stats")
+    kb.button(text="⬅️ Назад", callback_data="profile_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def requisites_edit_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💳 Изменить гривны", callback_data="edit_req_uah")
+    kb.button(text="⭐ Изменить звёзды", callback_data="edit_req_stars")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_stock_menu_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Загрузить .session", callback_data="admin_upload_session")
+    kb.button(text="📋 Все аккаунты", callback_data="admin_list_accounts")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_order_card_keyboard(order_id, status, user_id):
+    kb = InlineKeyboardBuilder()
+    if status == "awaiting_payment":
+        kb.button(text="✅ Подтвердить оплату", callback_data=f"admin_confirm_payment_{order_id}")
+    elif status == "paid":
+        kb.button(text="📱 Выдать аккаунт", callback_data=f"admin_deliver_{order_id}")
+    elif status == "completed":
+        kb.button(text="💰 Возврат", callback_data=f"admin_refund_{order_id}")
+
+    kb.button(text="💬 Написать покупателю", callback_data=f"admin_chat_with_user_{order_id}")
+    kb.button(text="❌ Отменить", callback_data=f"admin_reject_{order_id}")
+    kb.button(text="⬅️ Назад", callback_data="admin_back_to_list")
+    kb.button(text="🔄 Обновить", callback_data=f"admin_order_detail_{order_id}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_all_orders_keyboard(page=0, per_page=5, status_filter=None):
+    kb = InlineKeyboardBuilder()
+    orders = load_orders()
+    filtered = {k: v for k, v in orders.items() if (not status_filter or v["status"] == status_filter)}
+    order_list = sorted(filtered.items(), reverse=True)
+    total_pages = (len(order_list) + per_page - 1) // per_page
+
+    if total_pages == 0:
+        kb.button(text="🔄 Обновить", callback_data="admin_page_0")
+        kb.adjust(1)
+        return kb.as_markup()
+
+    start = page * per_page
+    end = start + per_page
+
+    for oid, order in order_list[start:end]:
+        emoji, _ = STATUS_CONFIG.get(order["status"], ("❓", ""))
+        symbol = method_symbol(order.get("payment_method", "uah"))
+        short_id = order.get("short_id", oid[:8])
+        total = order["total"] if isinstance(order["total"], str) else f"{order['total']}{symbol}"
+        kb.button(text=f"{emoji} {short_id} | {order['product'][:15]} | {total}",
+                  callback_data=f"admin_order_detail_{oid}")
+
+    if total_pages > 1:
+        if page > 0:
+            kb.button(text="⬅️", callback_data=f"admin_page_{page - 1}")
+        if page < total_pages - 1:
+            kb.button(text="➡️", callback_data=f"admin_page_{page + 1}")
+
+    kb.button(text="🔄 Обновить", callback_data=f"admin_page_{page}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_dashboard_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📦 Заказы", callback_data="admin_orders_dashboard")
+    kb.button(text="📦 Склад", callback_data="admin_stock_menu")
+    kb.button(text="👥 Рефералы", callback_data="admin_referrals_dashboard")
+    kb.button(text="🔥 Акции", callback_data="admin_promotions_dashboard")
+    kb.button(text="🎟 Промокоды", callback_data="admin_promo_dashboard")
+    kb.button(text="⭐ Уровни", callback_data="admin_levels_dashboard")
+    kb.button(text="📢 Рассылки", callback_data="admin_broadcasts_dashboard")
+    kb.button(text="📊 Аналитика", callback_data="admin_analytics_dashboard")
+    kb.button(text="🔗 Источники", callback_data="admin_traffic_dashboard")
+    kb.button(text="🔄 Обновить", callback_data="admin_dashboard_refresh")
+    kb.adjust(2, 2, 2, 2, 1, 1)
+    return kb.as_markup()
+
+
+def admin_promotions_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Создать акцию", callback_data="admin_create_promotion")
+    for pid, promo in list(load_promotions().items())[:10]:
+        status = "🟢" if promo.get("is_active", True) else "🔴"
+        kb.button(text=f"{status} {promo.get('name', 'Без названия')}", callback_data=f"admin_promo_detail_{pid}")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_promo_codes_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Создать промокод", callback_data="admin_create_promo_code")
+    for code, data in list(load_promo_codes().items())[:10]:
+        status = "🟢" if data.get("is_active", True) else "🔴"
+        uses = f"{data.get('current_uses', 0)}/{data.get('max_uses', '∞')}"
+        kb.button(text=f"{status} {code} ({uses})", callback_data=f"admin_promo_code_detail_{code}")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_levels_keyboard():
+    kb = InlineKeyboardBuilder()
+    for k, name, e in [("bronze", "Бронза", "🥉"), ("silver", "Серебро", "🥈"),
+                       ("gold", "Золото", "🥇"), ("platinum", "Платина", "💎"), ("vip", "VIP", "👑")]:
+        kb.button(text=f"{e} {name}", callback_data=f"admin_edit_level_{k}")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_broadcasts_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="➕ Создать рассылку", callback_data="admin_create_broadcast_template")
+    for bid, bc in load_broadcasts().items():
+        status = "🟢" if bc.get("is_active", True) else "🔴"
+        kb.button(text=f"{status} {bc.get('days_inactive', '?')} дней", callback_data=f"admin_broadcast_detail_{bid}")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_referrals_settings_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Изменить бонус %", callback_data="admin_edit_referral_bonus")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_analytics_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📈 По дням", callback_data="admin_analytics_by_days")
+    kb.button(text="⏰ По часам", callback_data="admin_analytics_by_hours")
+    kb.button(text="🌍 По странам", callback_data="admin_analytics_by_country")
+    kb.button(text="⬅️ Назад", callback_data="admin_dashboard_refresh")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+# ==================== ТЕКСТЫ ====================
+FAQ_TEXT = """
+❓ <b>КАК КУПИТЬ АККАУНТ?</b>
+
+1️⃣ Выберите категорию и страну в каталоге
+2️⃣ Выберите способ оплаты (звёзды/гривны)
+3️⃣ Подтвердите заказ
+4️⃣ Оплатите — аккаунт выдастся автоматически
+
+📱 <b>Как войти в аккаунт:</b>
+1. Получите файл <code>.session</code> после оплаты
+2. Используйте его в Telethon или замените tdata
+3. Когда Telegram запросит код — нажмите «🔑 Запросить код»
+4. Бот автоматически перешлёт код в этот чат
+
+🎁 <b>Бонусы:</b>
+• 5% реферальный бонус промокодом
+• Скидки по уровням: Бронза → VIP
+
+📞 <b>Контакты:</b>
+• Продавец: @MaskYoY
+• Канал: @owerpass_store
+"""
+
+
+# ==================== СТАРТ ====================
+@dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔥 ПРОГРЕТЬ ВСЕ", callback_data="warmup_all"))
-    b.row(
-        InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ", callback_data="check_all"),
-        InlineKeyboardButton(text="📊 СТАТЫ", callback_data="stats"),
-    )
-    b.row(InlineKeyboardButton(text="📁 СПИСОК", callback_data="list"))
-    
-    count = len([f for f in os.listdir(SESS_DIR) if f.endswith(".session")])
-    await message.answer(
-        f"<b>🔥 Account Warmer v3</b>\n\n"
-        f"📁 Сессий: <b>{count}</b>\n"
-        f"🎨 Тем: <b>{len(set(p['img'] for p in PROFILES))}</b>\n"
-        f"👤 Профилей: <b>{len(PROFILES)}</b>\n\n"
-        f"<code>/warmup</code> — прогреть (с проверкой)\n"
-        f"<code>/check</code> — только проверить\n"
-        f"<code>/list</code> — список\n"
-        f"<code>/clear</code> — очистить",
-        reply_markup=b.as_markup()
-    )
+    ref_code = None
+    if message.text and len(message.text.split()) > 1:
+        ref_code = message.text.split()[1]
 
-@dp.message(F.document)
-async def handle_session(message: types.Message):
+    is_new = await add_user(message.from_user.id, message.from_user.username,
+                            message.from_user.full_name, ref_code=ref_code)
+
+    if message.from_user.id == ADMIN_ID:
+        await message.answer("🔐 Админ-панель OverPass Store", reply_markup=get_admin_reply_keyboard())
+        return
+
+    if not await check_subscription(message.from_user.id):
+        await message.answer("⚠️ Подпишитесь на канал магазина!", reply_markup=subscribe_keyboard())
+        return
+
+    text = "👋 Добро пожаловать в OverPass Store!\n"
+    text += "🔹 Продажа номеров Telegram\n"
+    text += "🔹 Автоматическая выдача\n"
+
+    if is_new and ref_code and ref_code.startswith("ref_"):
+        text += "🎁 Вы зарегистрированы по реферальной ссылке!\n"
+
+    text += "Выберите раздел:"
+    await message.answer(text, reply_markup=get_main_reply_keyboard())
+
+
+@dp.callback_query(F.data == "check_sub")
+async def process_check_sub(callback: types.CallbackQuery):
+    await callback.answer()
+    if await check_subscription(callback.from_user.id):
+        try:
+            await callback.message.edit_text("🎉 Спасибо за подписку!", reply_markup=main_menu_keyboard())
+        except:
+            await callback.message.answer("🎉 Спасибо за подписку!", reply_markup=main_menu_keyboard())
+        await callback.message.answer("Используйте кнопки для навигации:", reply_markup=get_main_reply_keyboard())
+    else:
+        await callback.answer("❌ Вы не подписались!", show_alert=True)
+
+
+# ==================== АДМИН: СКЛАД ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📦 Склад")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_stock_menu")
+async def admin_stock_menu(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        msg = event.message
+        edit = True
+    else:
+        msg = event
+        edit = False
+
+    counts = stock_count()
+    text = "📦 <b>СКЛАД АККАУНТОВ</b>\n\n"
+
+    if counts:
+        total = sum(counts.values())
+        text += f"<b>Всего в наличии:</b> {total}\n\n"
+        for c, n in sorted(counts.items(), key=lambda x: -x[1]):
+            if n > 0:
+                text += f"• {c.upper()}: <b>{n}</b> шт.\n"
+    else:
+        text += "<i>Склад пуст</i>\n"
+
+    kb = admin_stock_menu_keyboard()
+    if edit:
+        try:
+            await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except:
+            await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_upload_session")
+async def admin_upload_session_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "📁 Отправьте файл <code>.session</code> для загрузки на склад.",
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminStockStates.waiting_for_session)
+
+
+@dp.message(AdminStockStates.waiting_for_session, F.document)
+async def admin_receive_session(message: types.Message, state: FSMContext):
     doc = message.document
     if not doc.file_name.endswith(".session"):
-        return await message.reply("❌ Только .session")
-    await bot.download(doc, os.path.join(SESS_DIR, doc.file_name))
-    count = len([f for f in os.listdir(SESS_DIR) if f.endswith(".session")])
-    await message.reply(f"✅ {doc.file_name} загружен\n📁 Всего: {count}")
+        await message.answer("❌ Нужен файл .session")
+        return
 
-@dp.message(Command("warmup"))
-async def cmd_warmup(message: types.Message):
-    msg = await message.reply("🔥 Запускаю...")
-    await run_warmup(message.chat.id, msg)
+    temp_path = os.path.join(TEMP_DIR, doc.file_name)
+    await bot.download(doc, temp_path)
 
-@dp.message(Command("check"))
-async def cmd_check(message: types.Message):
-    sessions = [f for f in os.listdir(SESS_DIR) if f.endswith(".session")]
-    if not sessions:
-        return await message.reply("❌ Нет сессий.")
-    
-    msg = await message.reply(f"🔍 Проверяю {len(sessions)} сессий...")
-    valid = []
-    invalid = []
-    
-    sem = asyncio.Semaphore(10)
-    
-    async def worker(s):
-        async with sem:
-            r = await validate_session(s)
-            if r.get("valid"):
-                valid.append(r)
-            else:
-                invalid.append(r)
-    
-    await asyncio.gather(*[worker(s) for s in sessions])
-    
-    report = f"<b>🔍 Проверка завершена</b>\n\n"
-    report += f"✅ Валидных: <b>{len(valid)}</b>\n"
-    report += f"❌ Невалидных: <b>{len(invalid)}</b>\n\n"
-    
-    if valid:
-        report += "<b>✅ Валидные:</b>\n"
-        for r in valid:
-            report += f"• {r['session']} | +{r.get('phone','?')} | @{r.get('username','—')} | {r.get('country','?')}\n"
-    
-    if invalid:
-        report += "\n<b>❌ Невалидные:</b>\n"
-        for r in invalid:
-            report += f"• {r['session']}: {r.get('error','?')[:60]}\n"
-    
-    for i in range(0, len(report), 4000):
-        await bot.send_message(message.chat.id, report[i:i+4000], parse_mode=ParseMode.HTML)
+    await state.update_data(session_temp_path=temp_path,
+                            session_name=doc.file_name.replace(".session", ""))
 
-@dp.callback_query(F.data == "warmup_all")
-async def cb_warmup(cb: types.CallbackQuery):
-    await cb.answer()
-    await run_warmup(cb.message.chat.id, cb.message)
+    kb = InlineKeyboardBuilder()
+    seen = set()
+    for cat_key, cat_data in CATEGORIES.items():
+        for product_name, pdata in cat_data["products"].items():
+            code = pdata.get("code", "")
+            if code and code not in seen:
+                seen.add(code)
+                kb.button(text=product_name, callback_data=f"stock_country_{code}")
+    kb.button(text="❌ Отмена", callback_data="admin_stock_cancel")
+    kb.adjust(2)
 
-@dp.callback_query(F.data == "check_all")
-async def cb_check(cb: types.CallbackQuery):
-    await cb.answer()
-    await cb.message.edit_text("🔍 Проверяю...")
-    sessions = [f for f in os.listdir(SESS_DIR) if f.endswith(".session")]
-    valid = 0
-    invalid = 0
-    sem = asyncio.Semaphore(10)
-    
-    async def worker(s):
-        nonlocal valid, invalid
-        async with sem:
-            r = await validate_session(s)
-            if r.get("valid"):
-                valid += 1
-            else:
-                invalid += 1
-    
-    await asyncio.gather(*[worker(s) for s in sessions])
-    await cb.message.edit_text(f"✅ Валидных: {valid}\n❌ Невалидных: {invalid}")
+    await message.answer("🌍 Выберите страну для аккаунта:", reply_markup=kb.as_markup())
+    await state.set_state(AdminStockStates.waiting_for_country)
 
-@dp.callback_query(F.data == "stats")
-async def cb_stats(cb: types.CallbackQuery):
-    sessions = [f for f in os.listdir(SESS_DIR) if f.endswith(".session")]
-    themes = set(p["img"] for p in PROFILES)
-    await cb.message.edit_text(
-        f"<b>📊 Статистика</b>\n\n"
-        f"📁 Сессий: {len(sessions)}\n"
-        f"🎨 Тем: {len(themes)}\n"
-        f"👤 Профилей: {len(PROFILES)}\n"
-        f"🌍 Каналов: {len(CHANNELS)}\n\n"
-        f"<b>Темы:</b> {', '.join(sorted(themes))}"
+
+@dp.callback_query(AdminStockStates.waiting_for_country, F.data.startswith("stock_country_"))
+async def admin_choose_country(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    country = callback.data.replace("stock_country_", "")
+    await state.update_data(stock_country=country)
+    await callback.message.edit_text("📱 Введите номер телефона (в формате +71234567890):")
+    await state.set_state(AdminStockStates.waiting_for_phone)
+
+
+@dp.message(AdminStockStates.waiting_for_phone, F.text)
+async def admin_receive_phone(message: types.Message, state: FSMContext):
+    await state.update_data(stock_phone=message.text.strip())
+    await message.answer("💰 Введите цену в гривнах (например, 150):")
+    await state.set_state(AdminStockStates.waiting_for_price_uah)
+
+
+@dp.message(AdminStockStates.waiting_for_price_uah, F.text)
+async def admin_receive_price_uah(message: types.Message, state: FSMContext):
+    try:
+        price = float(message.text)
+    except:
+        await message.answer("❌ Введите число")
+        return
+    await state.update_data(stock_price_uah=price)
+    await message.answer("⭐ Введите цену в звёздах (например, 200):")
+    await state.set_state(AdminStockStates.waiting_for_price_stars)
+
+
+@dp.message(AdminStockStates.waiting_for_price_stars, F.text)
+async def admin_receive_price_stars(message: types.Message, state: FSMContext):
+    try:
+        price = int(message.text)
+    except:
+        await message.answer("❌ Введите целое число")
+        return
+
+    data = await state.get_data()
+    try:
+        meta = add_account(
+            session_src=data["session_temp_path"],
+            country=data["stock_country"],
+            phone=data["stock_phone"],
+            price_uah=data["stock_price_uah"],
+            price_stars=price,
+        )
+        try:
+            os.remove(data["session_temp_path"])
+        except:
+            pass
+        await message.answer(
+            f"✅ <b>Аккаунт на складе!</b>\n\n"
+            f"🌍 {meta['country'].upper()}\n"
+            f"📱 {meta['phone']}\n"
+            f"💰 {meta['price_uah']}₴ / {meta['price_stars']}⭐",
+            reply_markup=get_admin_reply_keyboard(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    await state.clear()
+
+
+@dp.callback_query(F.data == "admin_stock_cancel")
+async def admin_stock_cancel(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text("❌ Отменено")
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_list_accounts")
+async def admin_list_accounts(callback: types.CallbackQuery):
+    await callback.answer()
+    avail = all_available()
+    text = f"📋 <b>ВСЕ АККАУНТЫ ({len(avail)})</b>\n\n"
+    for acc in avail[:30]:
+        text += f"• {acc['country'].upper()} | {acc['phone']} | {acc['price_stars']}⭐\n"
+    if len(avail) > 30:
+        text += f"\n...и ещё {len(avail) - 30}"
+    kb = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_stock_menu").as_markup()
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+# ==================== АДМИН: СТАТИСТИКА И ЗАКАЗЫ ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📊 Статистика")
+async def admin_statistics(message: types.Message):
+    orders = load_orders()
+    users = load_users()
+    status_counts = {}
+    total_revenue_uah = 0
+    total_revenue_stars = 0
+
+    for order in orders.values():
+        s = order["status"]
+        status_counts[s] = status_counts.get(s, 0) + 1
+        if s == "completed" and not isinstance(order.get("total", 0), str):
+            if order.get("payment_method") == "uah":
+                total_revenue_uah += order.get("total", 0)
+            elif order.get("payment_method") == "stars":
+                total_revenue_stars += order.get("total", 0)
+
+    counts = stock_count()
+    text = (
+        f"📊 СТАТИСТИКА\n"
+        f"👤 Всего пользователей: {len(users)}\n"
+        f"📦 Всего заказов: {len(orders)}\n"
+        f"✅ Выполнено: {status_counts.get('completed', 0)}\n"
+        f"⏳ Ожидают: {status_counts.get('awaiting_payment', 0)}\n"
+        f"❌ Отклонено: {status_counts.get('rejected', 0)}\n"
+        f"💰 Гривны: {total_revenue_uah} ₴\n"
+        f"⭐ Звёзды: {total_revenue_stars} ⭐\n"
+        f"📦 Склад: {sum(counts.values())} акк."
     )
-    await cb.answer()
+    await message.answer(text, reply_markup=get_admin_reply_keyboard())
 
-@dp.callback_query(F.data == "list")
-async def cb_list(cb: types.CallbackQuery):
-    sessions = [f for f in os.listdir(SESS_DIR) if f.endswith(".session")]
-    if not sessions:
-        return await cb.message.edit_text("📁 Нет сессий")
-    text = f"<b>📁 Сессии ({len(sessions)})</b>\n\n"
-    for s in sessions[:40]:
-        text += f"• <code>{s}</code>\n"
-    await cb.message.edit_text(text)
-    await cb.answer()
 
-@dp.message(Command("list"))
-async def cmd_list(message: types.Message):
-    sessions = [f for f in os.listdir(SESS_DIR) if f.endswith(".session")]
-    if not sessions:
-        return await message.reply("📁 Нет сессий")
-    text = f"<b>📁 Сессии ({len(sessions)})</b>\n\n"
-    for s in sessions[:40]:
-        text += f"• <code>{s}</code>\n"
-    await message.reply(text)
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📋 Все заказы")
+async def admin_all_orders(message: types.Message):
+    await show_admin_orders_page(message, 0)
 
-@dp.message(Command("clear"))
-async def cmd_clear(message: types.Message):
-    for f in os.listdir(SESS_DIR):
-        os.remove(os.path.join(SESS_DIR, f))
-    await message.reply("🗑 Сессии удалены")
 
-async def
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "⏳ Ожидают оплаты")
+async def admin_pending_orders(message: types.Message):
+    await show_admin_orders_page(message, 0, "awaiting_payment")
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "✅ Выполненные")
+async def admin_completed_orders(message: types.Message):
+    await show_admin_orders_page(message, 0, "completed")
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_page_"))
+async def admin_page_nav(callback: types.CallbackQuery):
+    await callback.answer()
+    page = int(callback.data.replace("admin_page_", ""))
+    await show_admin_orders_page(callback.message, page, edit=True)
+
+
+async def show_admin_orders_page(target, page, status_filter=None, edit=False):
+    orders = load_orders()
+    filtered = {k: v for k, v in orders.items() if (not status_filter or v["status"] == status_filter)}
+    order_list = sorted(filtered.items(), reverse=True)
+    per_page = 5
+
+    if not order_list:
+        kb = admin_all_orders_keyboard(0, per_page, status_filter)
+        if edit:
+            await target.edit_text("📋 Нет заказов", reply_markup=kb)
+        else:
+            await target.answer("📋 Нет заказов", reply_markup=get_admin_reply_keyboard())
+        return
+
+    total_pages = (len(order_list) + per_page - 1) // per_page
+    page = max(0, min(page, total_pages - 1))
+
+    text = f"📋 ЗАКАЗЫ (стр. {page + 1}/{total_pages})\n"
+    for oid, order in order_list[page * per_page:(page + 1) * per_page]:
+        e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
+        s = method_symbol(order.get("payment_method", "uah"))
+        short = order.get("short_id", oid[:8])
+        created = datetime.fromisoformat(order["created_at"]).strftime("%d.%m %H:%M")
+        text += f"{e} {short} | {order['product'][:20]}\n  @{order.get('username', '—')} | {order['total']}{s} | {created}\n"
+
+    kb = admin_all_orders_keyboard(page, per_page, status_filter)
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=kb)
+        except:
+            pass
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_order_detail_"))
+async def admin_order_detail(callback: types.CallbackQuery):
+    await callback.answer()
+    order_id = callback.data.replace("admin_order_detail_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, order_id)
+    if not real_key:
+        await callback.answer("❌ Не найден", show_alert=True)
+        return
+    order = orders[real_key]
+    oid = real_key
+    e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
+    s = method_symbol(order.get("payment_method", "uah"))
+    short = order.get("short_id", oid[:8])
+    total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
+
+    text = (
+        f"📦 <b>Заказ {short}</b>\n"
+        f"👤 @{order.get('username', '—')}\n"
+        f"🆔 <code>{order['user_id']}</code>\n"
+        f"📅 {datetime.fromisoformat(order['created_at']).strftime('%d.%m.%Y %H:%M')}\n"
+        f"🌍 {order['product']}\n"
+        f"💰 {total}\n"
+        f"📌 {e} {st}\n"
+    )
+    if order.get("phone"):
+        text += f"📱 {order['phone']}\n"
+
+    try:
+        await callback.message.edit_text(text, reply_markup=admin_order_card_keyboard(oid, order["status"], order["user_id"]), parse_mode="HTML")
+    except:
+        await callback.message.answer(text, reply_markup=admin_order_card_keyboard(oid, order["status"], order["user_id"]), parse_mode="HTML")
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_back_to_list")
+async def admin_back_to_list(callback: types.CallbackQuery):
+    await callback.answer()
+    await show_admin_orders_page(callback.message, 0, edit=True)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "💰 Реквизиты")
+async def admin_requisites(message: types.Message):
+    req = load_requisites()
+    text = (f"💰 РЕКВИЗИТЫ:\n"
+            f"💳 Гривны:\n{req.get('uah', '—')}\n"
+            f"⭐ Звёзды:\n{req.get('stars', '—')}\n")
+    await message.answer(text, reply_markup=requisites_edit_keyboard())
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("edit_req_"))
+async def edit_requisite_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    method = callback.data.replace("edit_req_", "")
+    labels = {"uah": "Гривны", "stars": "Звёзды"}
+    await state.update_data(edit_req_method=method)
+    await callback.message.answer(f"✏️ Введите новые реквизиты для {labels.get(method, method)}:")
+    await state.set_state(AdminStates.waiting_for_requisites_edit)
+
+
+@dp.message(AdminStates.waiting_for_requisites_edit, F.text)
+async def save_requisite(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    method = data["edit_req_method"]
+    req = load_requisites()
+    req[method] = message.text
+    save_requisites(req)
+    await message.answer(f"✅ Реквизиты обновлены!", reply_markup=get_admin_reply_keyboard())
+    await state.clear()
+
+
+# ==================== АДМИН: РАССЫЛКА ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📢 Рассылка")
+async def admin_broadcast(message: types.Message, state: FSMContext):
+    users = load_users()
+    if not users:
+        await message.answer("❌ Нет пользователей")
+        return
+    await message.answer(f"📢 Отправьте сообщение для рассылки на {len(users)} пользователей. /cancel для отмены")
+    await state.set_state(AdminStates.waiting_for_broadcast)
+
+
+@dp.message(AdminStates.waiting_for_broadcast)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    if message.text == "/cancel":
+        await message.answer("❌ Отменено", reply_markup=get_admin_reply_keyboard())
+        await state.clear()
+        return
+    users = load_users()
+    success = failed = 0
+    sm = await message.answer(f"⏳ Рассылка...")
+    for uid in users.keys():
+        try:
+            await bot.copy_message(int(uid), message.chat.id, message.message_id)
+            success += 1
+            await asyncio.sleep(0.05)
+        except:
+            failed += 1
+    await sm.edit_text(f"✅ Готово!\n📤 {success}\n❌ {failed}", reply_markup=get_admin_reply_keyboard())
+    await state.clear()
+
+
+@dp.message(Command("cancel"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    if await state.get_state() is None:
+        return
+    await state.clear()
+    kb = get_admin_reply_keyboard() if message.from_user.id == ADMIN_ID else get_main_reply_keyboard()
+    await message.answer("❌ Отменено", reply_markup=kb)
+
+
+# ==================== АДМИН: УПРАВЛЕНИЕ ЗАКАЗАМИ ====================
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_confirm_payment_"))
+async def admin_confirm_payment(callback: types.CallbackQuery):
+    await callback.answer()
+    order_id = callback.data.replace("admin_confirm_payment_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, order_id)
+    if not real_key:
+        await callback.answer("❌ Не найден", show_alert=True)
+        return
+    order = orders[real_key]
+    order["status"] = "paid"
+    order["paid_at"] = datetime.now().isoformat()
+    save_orders(orders)
+    try:
+        await bot.send_message(order["user_id"], f"✅ Оплата по заказу {order.get('short_id', real_key)} подтверждена.")
+    except:
+        pass
+    await callback.message.edit_text(
+        callback.message.text + f"\n✅ <b>ОПЛАЧЕНО</b>",
+        reply_markup=admin_order_card_keyboard(real_key, "paid", order["user_id"]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_reject_"))
+async def admin_reject_order(callback: types.CallbackQuery):
+    await callback.answer()
+    order_id = callback.data.replace("admin_reject_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, order_id)
+    if not real_key:
+        return
+    order = orders[real_key]
+    order["status"] = "rejected"
+    save_orders(orders)
+
+    if order.get("country_code") and order.get("session_name"):
+        release_account(order["country_code"], order["session_name"])
+
+    try:
+        await bot.send_message(order["user_id"], f"❌ Заказ {order.get('short_id', real_key)} отклонён")
+    except:
+        pass
+    await callback.message.edit_text(
+        callback.message.text + f"\n❌ <b>ОТКЛОНЁН</b>",
+        reply_markup=admin_order_card_keyboard(real_key, "rejected", order["user_id"]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_deliver_"))
+async def admin_deliver_account(callback: types.CallbackQuery):
+    await callback.answer()
+    order_id = callback.data.replace("admin_deliver_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, order_id)
+    if not real_key:
+        return
+    order = orders[real_key]
+
+    if not order.get("session_name") or not order.get("country_code"):
+        await callback.answer("❌ Заказ без привязки к складу", show_alert=True)
+        return
+
+    await deliver_to_user(order, real_key)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_refund_"))
+async def admin_refund(callback: types.CallbackQuery):
+    await callback.answer()
+    order_id = callback.data.replace("admin_refund_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, order_id)
+    if not real_key:
+        return
+    order = orders[real_key]
+    order["status"] = "refunded"
+    save_orders(orders)
+    try:
+        await bot.send_message(order["user_id"], f"💰 Возврат по {order.get('short_id', real_key)} оформлен.")
+    except:
+        pass
+    await callback.message.edit_text(callback.message.text + "\n💰 <b>ВОЗВРАТ</b>",
+        reply_markup=admin_order_card_keyboard(real_key, "refunded", order["user_id"]), parse_mode="HTML")
+
+
+async def deliver_to_user(order: dict, order_key: str):
+    country_code = order["country_code"]
+    session_name = order["session_name"]
+    phone = order["phone"]
+    user_id = order["user_id"]
+
+    sess_file = session_path(country_code, session_name)
+
+    if not os.path.exists(sess_file):
+        try:
+            await bot.send_message(user_id, "❌ Ошибка: файл сессии не найден. Напишите в поддержку @MaskYoY")
+        except:
+            pass
+        return
+
+    try:
+        await bot.send_document(
+            chat_id=user_id,
+            document=FSInputFile(sess_file, filename=f"{country_code}_{phone}.session"),
+            caption=(
+                f"🎉 <b>ВАШ АККАУНТ</b>\n\n"
+                f"🌍 {country_code.upper()}\n"
+                f"📱 {phone}\n\n"
+                f"<b>Как войти:</b>\n"
+                f"1. Открой Telegram Desktop\n"
+                f"2. Используй .session в Telethon\n"
+                f"3. Когда Telegram запросит код — нажми кнопку ниже\n\n"
+                f"<b>Код придёт автоматически в этот чат!</b>"
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardBuilder().button(
+                text="🔑 Запросить код",
+                callback_data=f"request_code_{order_key}"
+            ).as_markup()
+        )
+        mark_sold(country_code, session_name, user_id)
+        order["status"] = "completed"
+        order["completed_at"] = datetime.now().isoformat()
+        save_orders(load_orders() | {order_key: order})
+        asyncio.create_task(start_code_watcher(country_code, session_name, user_id))
+    except Exception as e:
+        logger.error(f"Deliver error: {e}")
+
+
+# ==================== ОТЗЫВЫ ====================
+@dp.callback_query(F.data.startswith("leave_review_"))
+async def start_review(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    oid = callback.data.replace("leave_review_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, oid)
+    if not real_key:
+        return
+    order = orders[real_key]
+    if order["status"] != "completed":
+        await callback.answer("❌ Нельзя оставить отзыв", show_alert=True)
+        return
+    await state.update_data(review_order_id=real_key)
+    await callback.message.edit_text(f"Оцените заказ {order.get('short_id', real_key)}:", reply_markup=stars_keyboard())
+    await state.set_state(ReviewStates.waiting_for_stars)
+
+
+@dp.callback_query(ReviewStates.waiting_for_stars, F.data.startswith("stars_"))
+async def process_stars(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    rating = int(callback.data.split("_")[1])
+    await state.update_data(stars=rating)
+    await callback.message.edit_text(
+        f"{'⭐' * rating}\n📸 Отправьте фото или пропустите:",
+        reply_markup=review_photo_skip_keyboard()
+    )
+    await state.set_state(ReviewStates.waiting_for_photo_or_skip)
+
+
+@dp.callback_query(ReviewStates.waiting_for_photo_or_skip, F.data == "skip_photo")
+async def skip_photo(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.update_data(photo=None)
+    await callback.message.edit_text("✏️ Напишите текст отзыва:")
+    await state.set_state(ReviewStates.waiting_for_text)
+
+
+@dp.message(ReviewStates.waiting_for_photo_or_skip, F.photo)
+async def process_photo(message: types.Message, state: FSMContext):
+    await state.update_data(photo=message.photo[-1].file_id)
+    await message.answer("✏️ Напишите текст отзыва:")
+    await state.set_state(ReviewStates.waiting_for_text)
+
+
+@dp.message(ReviewStates.waiting_for_text, F.text)
+async def process_review_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    rid = f"rev_{message.from_user.id}_{int(datetime.now().timestamp())}"
+    reviews = load_reviews()
+    reviews[rid] = {
+        "review_id": rid, "user_id": message.from_user.id,
+        "username": message.from_user.username, "full_name": message.from_user.full_name,
+        "stars": data.get("stars", 5), "text": message.text,
+        "photo": data.get("photo"), "order_id": data.get("review_order_id"),
+        "status": "pending", "created_at": datetime.now().isoformat(),
+    }
+    save_reviews(reviews)
+
+    oid = data.get("review_order_id")
+    if oid:
+        orders = load_orders()
+        rk = find_order_key(orders, oid)
+        if rk:
+            orders[rk]["reviewed"] = True
+            save_orders(orders)
+
+    stars_str = "⭐" * data.get("stars", 5)
+    caption = (f"НОВЫЙ ОТЗЫВ\nID: {rid}\nОт: {message.from_user.full_name}\n"
+               f"@{message.from_user.username}\nОценка: {stars_str}\nТекст: {message.text}")
+    try:
+        if data.get("photo"):
+            await bot.send_photo(ADMIN_ID, data["photo"], caption=caption, reply_markup=moderation_keyboard(rid))
+        else:
+            await bot.send_message(ADMIN_ID, caption, reply_markup=moderation_keyboard(rid))
+        await message.answer("🙏 Спасибо за отзыв! Он будет опубликован после проверки.",
+                             reply_markup=get_main_reply_keyboard())
+    except Exception as e:
+        logger.error(f"Review error: {e}")
+    await state.clear()
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("approve_"))
+async def approve_review(callback: types.CallbackQuery):
+    await callback.answer()
+    rid = callback.data.replace("approve_", "")
+    reviews = load_reviews()
+    review = reviews.get(rid)
+    if not review:
+        return
+    text = (f"⭐️ НОВЫЙ ОТЗЫВ\nПокупатель: @{review.get('username', 'Покупатель')}\n"
+            f"Оценка: {'⭐️' * review['stars']}\nОтзыв: {review['text']}\n"
+            f"Купить: @MaskYoY\nКанал: @owerpass_store")
+    try:
+        if review.get("photo"):
+            await bot.send_photo(CHANNEL_ID, review["photo"], caption=text)
+        else:
+            await bot.send_message(CHANNEL_ID, text)
+        await bot.send_message(review["user_id"], "🎉 Ваш отзыв опубликован!")
+        review["status"] = "approved"
+        save_reviews(reviews)
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=callback.message.caption + "\n✅ ОПУБЛИКОВАН")
+        else:
+            await callback.message.edit_text(callback.message.text + "\n✅ ОПУБЛИКОВАН")
+    except Exception as e:
+        logger.error(f"Approve error: {e}")
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("reject_"))
+async def reject_review(callback: types.CallbackQuery):
+    await callback.answer()
+    rid = callback.data.replace("reject_", "")
+    reviews = load_reviews()
+    review = reviews.get(rid)
+    if review:
+        review["status"] = "rejected"
+        save_reviews(reviews)
+        try:
+            await bot.send_message(review["user_id"], "❌ Отзыв отклонён.")
+        except:
+            pass
+
+
+# ==================== ЗАКАЗЫ ПОЛЬЗОВАТЕЛЯ ====================
+@dp.callback_query(F.data == "my_orders")
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "📋 Мои заказы")
+async def show_user_orders(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        user_id = event.from_user.id
+        target = event.message
+    else:
+        user_id = event.from_user.id
+        target = event
+
+    orders = load_orders()
+    user_orders = {k: v for k, v in orders.items() if v["user_id"] == user_id}
+
+    if not user_orders:
+        text = "📋 У вас пока нет заказов"
+        kb = main_menu_keyboard()
+    else:
+        text = f"📋 ВАШИ ЗАКАЗЫ ({len(user_orders)})\n"
+        kb_builder = InlineKeyboardBuilder()
+        for oid, order in sorted(user_orders.items(), reverse=True):
+            e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
+            s = method_symbol(order.get("payment_method", "uah"))
+            short = order.get("short_id", oid[:8])
+            total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
+            text += f"{e} {short} | {order['product']} | {total}\n"
+            kb_builder.button(text=f"📋 {short}", callback_data=f"order_detail_{oid}")
+        kb_builder.button(text="⬅️ Меню", callback_data="main_menu")
+        kb_builder.adjust(1)
+        kb = kb_builder.as_markup()
+
+    try:
+        await target.edit_text(text, reply_markup=kb)
+    except:
+        await target.answer(text, reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("order_detail_"))
+async def show_order_detail(callback: types.CallbackQuery):
+    await callback.answer()
+    oid = callback.data.replace("order_detail_", "")
+    orders = load_orders()
+    real_key = find_order_key(orders, oid)
+    if not real_key:
+        await callback.answer("❌ Не найден", show_alert=True)
+        return
+    order = orders[real_key]
+    oid = real_key
+    e, st = STATUS_CONFIG.get(order["status"], ("❓", ""))
+    s = method_symbol(order.get("payment_method", "uah"))
+    short = order.get("short_id", oid[:8])
+    total = order["total"] if isinstance(order["total"], str) else f"{order['total']} {s}"
+
+    text = (f"📋 ЗАКАЗ {short}\n"
+            f"Товар: {order['product']}\n"
+            f"Оплата: {method_label(order['payment_method'])}\n"
+            f"Сумма: {total}\n"
+            f"Статус: {e} {st}\n")
+    if order.get("phone"):
+        text += f"📱 Номер: {order['phone']}\n"
+
+    if order["status"] == "completed":
+        kb = user_order_actions_keyboard(oid)
+    elif order["status"] == "awaiting_payment":
+        kb = awaiting_payment_keyboard(oid)
+    else:
+        b = InlineKeyboardBuilder()
+        b.button(text="📋 Мои заказы", callback_data="my_orders")
+        b.button(text="⬅️ Меню", callback_data="main_menu")
+        b.adjust(1)
+        kb = b.as_markup()
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+@dp.callback_query(F.data == "my_accounts")
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "📦 Мои аккаунты")
+async def show_my_accounts(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        user_id = event.from_user.id
+        target = event.message
+    else:
+        user_id = event.from_user.id
+        target = event
+
+    accounts = get_user_accounts(user_id)
+
+    if not accounts:
+        text = "📦 У вас пока нет купленных аккаунтов"
+        kb = main_menu_keyboard()
+    else:
+        text = f"📦 ВАШИ АККАУНТЫ ({len(accounts)})\n\n"
+        b = InlineKeyboardBuilder()
+        for acc in accounts:
+            text += f"🌍 {acc['country'].upper()} | 📱 {acc['phone']}\n"
+            b.button(text=f"🔑 Код для {acc['phone']}",
+                     callback_data=f"request_code_for_{acc['country']}_{acc['session_name']}")
+        b.button(text="⬅️ Меню", callback_data="main_menu")
+        b.adjust(1)
+        kb = b.as_markup()
+
+    try:
+        await target.edit_text(text, reply_markup=kb)
+    except:
+        await target.answer(text, reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("request_code_for_"))
+async def request_code_for_account(callback: types.CallbackQuery):
+    await callback.answer()
+    data = callback.data.replace("request_code_for_", "")
+
+    if "_" not in data:
+        await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    country, session_name = data.split("_", 1)
+
+    await callback.message.answer(
+        "🔑 <b>Ожидайте код...</b>\n\n"
+        "Сейчас войди в Telegram с номером аккаунта.\n"
+        "Когда придёт код — я автоматически перешлю его сюда.",
+        parse_mode="HTML"
+    )
+    asyncio.create_task(start_code_watcher(country, session_name, callback.from_user.id))
+
+
+@dp.callback_query(F.data.startswith("user_replace_"))
+async def user_replace(callback: types.CallbackQuery):
+    await callback.answer()
+    oid = callback.data.replace("user_replace_", "")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    if rk:
+        await bot.send_message(ADMIN_ID, f"🔄 Запрос замены: {orders[rk].get('short_id', rk)} от @{callback.from_user.username}")
+    await callback.message.answer("🔄 Запрос отправлен продавцу. @MaskYoY")
+
+
+@dp.callback_query(F.data.startswith("user_refund_"))
+async def user_refund(callback: types.CallbackQuery):
+    await callback.answer()
+    oid = callback.data.replace("user_refund_", "")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    if rk:
+        await bot.send_message(ADMIN_ID, f"💰 Запрос возврата: {orders[rk].get('short_id', rk)} от @{callback.from_user.username}")
+    await callback.message.answer("💰 Запрос возврата отправлен. @MaskYoY")
+
+
+# ==================== ПОДДЕРЖКА ====================
+@dp.callback_query(F.data.startswith("support_"))
+async def start_support(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    oid = callback.data.replace("support_", "")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    if rk:
+        oid = rk
+    await state.update_data(support_order_id=oid)
+    await state.set_state(SupportStates.chatting)
+    close_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Закрыть чат")]], resize_keyboard=True)
+    await callback.message.answer("🆘 Напишите сообщение продавцу. Кнопка ниже — закрыть чат.", reply_markup=close_kb)
+
+
+@dp.message(SupportStates.chatting, F.text == "❌ Закрыть чат")
+async def close_support(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Чат закрыт", reply_markup=get_main_reply_keyboard())
+
+
+@dp.message(SupportStates.chatting)
+async def relay_to_admin(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    oid = data.get("support_order_id", "—")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    short = orders[rk].get("short_id", oid) if rk else oid
+
+    await bot.send_message(ADMIN_ID, f"🆘 ОТ @{message.from_user.username} | Заказ {short}")
+    fwd = await bot.copy_message(ADMIN_ID, message.chat.id, message.message_id)
+    relay = load_relay()
+    relay[str(fwd.message_id)] = message.from_user.id
+    save_relay(relay)
+    await message.answer("✅ Отправлено продавцу")
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.reply_to_message)
+async def relay_admin_to_user(message: types.Message):
+    relay = load_relay()
+    uid = relay.get(str(message.reply_to_message.message_id))
+    if not uid:
+        return
+    try:
+        await bot.copy_message(uid, message.chat.id, message.message_id)
+        await message.answer("✅ Доставлено")
+    except Exception as e:
+        await message.answer(f"❌ {e}")
+
+
+# ==================== ЗАПРОС КОДА ====================
+@dp.callback_query(F.data.startswith("request_code_"))
+async def request_code_cb(callback: types.CallbackQuery):
+    await callback.answer()
+    oid = callback.data.replace("request_code_", "")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    if not rk:
+        await callback.answer("❌ Не найден", show_alert=True)
+        return
+    order = orders[rk]
+    await callback.message.answer(
+        "🔑 <b>Готово!</b>\n\nВходи в Telegram — код автоматически придёт сюда.",
+        parse_mode="HTML"
+    )
+    asyncio.create_task(start_code_watcher(order["country_code"], order["session_name"], callback.from_user.id))
+
+
+# ==================== ПОЛЬЗОВАТЕЛЬСКИЕ КНОПКИ ====================
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "🛍 Каталог")
+async def catalog_kb(message: types.Message, state: FSMContext):
+    if not await check_subscription(message.from_user.id):
+        return await message.answer("⚠️ Подпишитесь!", reply_markup=subscribe_keyboard())
+    await state.clear()
+    await message.answer("📂 Категории:", reply_markup=catalog_keyboard())
+
+
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "💬 Отзывы")
+async def reviews_kb(message: types.Message):
+    await message.answer("💬 Отзывы:", reply_markup=reviews_keyboard())
+
+
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "❓ Частые вопросы")
+async def faq_kb(message: types.Message):
+    await message.answer(FAQ_TEXT, reply_markup=get_main_reply_keyboard())
+
+
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "📢 Наш Канал")
+async def channel_kb(message: types.Message):
+    b = InlineKeyboardBuilder()
+    b.button(text="📢 Перейти", url="http://t.me/owerpass_store")
+    await message.answer("Наш канал:", reply_markup=b.as_markup())
+
+
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "👤 Профиль")
+async def profile_kb(message: types.Message):
+    await show_profile(message)
+
+
+@dp.callback_query(F.data == "profile_menu")
+async def profile_menu_cb(callback: types.CallbackQuery):
+    await callback.answer()
+    await show_profile(callback.message, callback.from_user)
+
+
+async def show_profile(target, user_obj=None):
+    if user_obj is None:
+        user_obj = target.from_user
+    user_id = user_obj.id
+
+    users = load_users()
+    level = get_user_level(user_id)
+    orders = load_orders()
+    completed = [o for o in orders.values() if o["user_id"] == user_id and o["status"] == "completed"]
+    total_spent = sum(o.get("total", 0) for o in completed if not isinstance(o.get("total", 0), str))
+    referrals = load_referrals()
+    rdata = referrals.get(str(user_id), {})
+    total_refs = len(rdata.get("referrals_list", []))
+
+    text = (f"👤 <b>Профиль</b>\n"
+            f"🆔 <code>{user_id}</code>\n"
+            f"👤 {user_obj.full_name}\n"
+            f"⭐ Уровень: {level['emoji']} {level['name']} (-{level['discount']}%)\n"
+            f"💵 Потрачено: {total_spent:.2f} грн\n"
+            f"📦 Покупок: {len(completed)}\n"
+            f"👥 Рефералов: {total_refs}\n"
+            f"💸 Бонусы: {rdata.get('total_earned', 0):.2f} грн")
+
+    try:
+        await target.edit_text(text, reply_markup=profile_keyboard(), parse_mode="HTML")
+    except:
+        await target.answer(text, reply_markup=profile_keyboard(), parse_mode="HTML")
+
+
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "👥 Рефералы")
+@dp.callback_query(F.data == "referral_menu")
+async def referral_menu(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        user_id = event.from_user.id
+        target = event.message
+    else:
+        user_id = event.from_user.id
+        target = event
+
+    referrals = load_referrals()
+    rdata = referrals.get(str(user_id), {})
+    if not rdata.get("referral_code"):
+        code = hashlib.md5(f"{user_id}_ref_salt".encode()).hexdigest()[:8].upper()
+        rdata["referral_code"] = code
+    rdata.setdefault("referrals_list", [])
+    rdata.setdefault("total_earned", 0)
+    referrals[str(user_id)] = rdata
+    save_referrals(referrals)
+
+    code = rdata["referral_code"]
+    bot_info = await bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start=ref_{code}"
+    bonus = get_setting("referral_bonus_percent", 5.0)
+
+    text = (f"👥 <b>Рефералы</b>\n"
+            f"🎁 Бонус: {bonus}%\n"
+            f"👤 Приглашено: {len(rdata['referrals_list'])}\n"
+            f"💸 Заработано: {rdata['total_earned']:.2f} грн\n\n"
+            f"🔗 <code>{link}</code>")
+
+    kb = referral_menu_keyboard()
+    try:
+        await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "referral_stats")
+async def referral_stats(callback: types.CallbackQuery):
+    await callback.answer()
+    referrals = load_referrals()
+    rdata = referrals.get(str(callback.from_user.id), {})
+    reflist = rdata.get("referrals_list", [])
+    text = "📊 Детали:\n"
+    if not reflist:
+        text += "<i>Нет рефералов</i>"
+    else:
+        for r in reflist[-10:]:
+            st = "✅" if r.get("first_purchase_done") else "⏳"
+            text += f"{st} @{r.get('username', '—')}\n"
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Назад", callback_data="referral_menu")
+    await callback.message.edit_text(text, reply_markup=b.as_markup(), parse_mode="HTML")
+
+
+@dp.message(F.from_user.id != ADMIN_ID, F.text == "🎟 Промокод")
+@dp.callback_query(F.data == "promo_menu")
+async def promo_menu(event, state: FSMContext = None):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+    else:
+        target = event
+
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Назад", callback_data="main_menu")
+    text = "🎟 <b>Введите промокод</b>"
+    try:
+        await target.edit_text(text, reply_markup=b.as_markup(), parse_mode="HTML")
+    except:
+        await target.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
+    if state:
+        await state.set_state(PromoStates.waiting_for_promo_code)
+
+
+@dp.message(PromoStates.waiting_for_promo_code, F.text)
+async def process_user_promo(message: types.Message, state: FSMContext):
+    if message.from_user.id == ADMIN_ID:
+        return
+    if message.text.startswith("/"):
+        await state.clear()
+        return
+    code = message.text.strip().upper()
+    promos = load_promo_codes()
+    p = promos.get(code)
+    if not p:
+        await message.answer("❌ Не найден")
+        await state.clear()
+        return
+    if not p.get("is_active", True) or (p.get("max_uses") and p.get("current_uses", 0) >= p["max_uses"]):
+        await message.answer("❌ Неактивен")
+        await state.clear()
+        return
+    if p.get("expires_at") and datetime.now() > datetime.fromisoformat(p["expires_at"]):
+        await message.answer("❌ Просрочен")
+        await state.clear()
+        return
+    await message.answer(f"✅ Промокод <code>{code}</code> принят!", parse_mode="HTML",
+                         reply_markup=main_menu_keyboard())
+    await state.clear()
+
+
+# ==================== КАТАЛОГ И ЗАКАЗ ====================
+@dp.callback_query(F.data == "main_menu")
+async def go_main(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    try:
+        await callback.message.edit_text("👋 Меню:", reply_markup=main_menu_keyboard())
+    except:
+        await callback.message.answer("👋 Меню:", reply_markup=main_menu_keyboard())
+
+
+@dp.callback_query(F.data == "menu_catalog")
+async def open_catalog(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    try:
+        await callback.message.edit_text("📂 Категории:", reply_markup=catalog_keyboard())
+    except:
+        await callback.message.answer("📂 Категории:", reply_markup=catalog_keyboard())
+
+
+@dp.callback_query(F.data == "menu_reviews")
+async def open_reviews(callback: types.CallbackQuery):
+    await callback.answer()
+    try:
+        await callback.message.edit_text("💬 Отзывы:", reply_markup=reviews_keyboard())
+    except:
+        await callback.message.answer("💬 Отзывы:", reply_markup=reviews_keyboard())
+
+
+@dp.callback_query(F.data == "out_of_stock")
+async def out_of_stock(callback: types.CallbackQuery):
+    await callback.answer("❌ Товар закончился", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("cat_"))
+async def show_category(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    cat = callback.data.replace("cat_", "")
+    if cat not in CATEGORIES:
+        return
+    try:
+        await callback.message.edit_text(
+            f"{CATEGORIES[cat]['name']}\nВыберите товар:",
+            reply_markup=category_products_keyboard(cat)
+        )
+    except:
+        await callback.message.answer(
+            f"{CATEGORIES[cat]['name']}\nВыберите товар:",
+            reply_markup=category_products_keyboard(cat)
+        )
+
+
+@dp.callback_query(F.data.startswith("product_"))
+async def product_selected(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        return
+    category = parts[1]
+    code = parts[2]
+
+    product_name = None
+    price_data = None
+    for pname, pdata in CATEGORIES[category]["products"].items():
+        if pdata.get("code") == code:
+            product_name = pname
+            price_data = pdata
+            break
+
+    if not product_name:
+        await callback.answer("❌ Не найден", show_alert=True)
+        return
+
+    await state.update_data(category=category, product=product_name, code=code)
+
+    try:
+        await callback.message.edit_text(
+            f"✅ {product_name}\n🔢 Количество:",
+            reply_markup=quantity_keyboard()
+        )
+    except:
+        await callback.message.answer(
+            f"✅ {product_name}\n🔢 Количество:",
+            reply_markup=quantity_keyboard()
+        )
+    await state.set_state(OrderStates.waiting_for_quantity)
+
+
+async def ask_payment_method(target, state: FSMContext):
+    data = await state.get_data()
+    category = data["category"]
+    product = data["product"]
+    code = data.get("code", "")
+
+    avail = all_available(code)
+    if not avail:
+        if hasattr(target, "edit_text"):
+            await target.edit_text("❌ Товар закончился", reply_markup=main_menu_keyboard())
+        else:
+            await target.answer("❌ Товар закончился", reply_markup=main_menu_keyboard())
+        await state.clear()
+        return
+
+    acc = avail[0]
+    await state.update_data(price_uah=acc["price_uah"], price_stars=acc["price_stars"])
+
+    text = (f"📦 {product}\n"
+            f"💰 {acc['price_uah']}₴\n"
+            f"⭐ {acc['price_stars']}\n\n"
+            f"Выберите способ оплаты:")
+
+    try:
+        await target.edit_text(text, reply_markup=payment_method_keyboard())
+    except:
+        await target.answer(text, reply_markup=payment_method_keyboard())
+
+
+@dp.callback_query(OrderStates.waiting_for_quantity, F.data.startswith("qty_"))
+async def process_quantity(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    qty = int(callback.data.split("_")[1])
+    await state.update_data(quantity=qty)
+    await ask_payment_method(callback.message, state)
+    await state.set_state(OrderStates.waiting_for_payment_method)
+
+
+@dp.callback_query(OrderStates.waiting_for_payment_method, F.data.startswith("pay_"))
+async def process_payment_method(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    method = callback.data.replace("pay_", "")
+    await state.update_data(payment_method=method)
+
+    data = await state.get_data()
+    product = data["product"]
+    code = data["code"]
+    price_uah = data.get("price_uah")
+    price_stars = data.get("price_stars")
+
+    if method == "stars":
+        total = price_stars
+        total_text = f"{total}⭐"
+    else:
+        total = price_uah
+        total_text = f"{total}₴"
+
+    text = (f"📋 Подтверждение\n"
+            f"Товар: {product}\n"
+            f"Оплата: {method_label(method)}\n"
+            f"Сумма: {total_text}\n\n"
+            f"Подтвердить?")
+
+    try:
+        await callback.message.edit_text(text, reply_markup=confirm_order_keyboard())
+    except:
+        await callback.message.answer(text, reply_markup=confirm_order_keyboard())
+    await state.set_state(OrderStates.waiting_for_confirmation)
+
+
+@dp.callback_query(OrderStates.waiting_for_confirmation, F.data == "confirm_order")
+async def confirm_order(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+
+    data = await state.get_data()
+    category = data["category"]
+    product = data["product"]
+    code = data["code"]
+    method = data["payment_method"]
+
+    acc = reserve_account(code, callback.from_user.id)
+    if not acc:
+        await callback.message.edit_text("❌ Товар закончился!", reply_markup=main_menu_keyboard())
+        await state.clear()
+        return
+
+    short_id = generate_short_order_id()
+    total = acc["price_stars"] if method == "stars" else acc["price_uah"]
+
+    orders = load_orders()
+    orders[short_id] = {
+        "order_id": short_id, "short_id": short_id,
+        "user_id": callback.from_user.id, "username": callback.from_user.username,
+        "full_name": callback.from_user.full_name,
+        "category": category, "product": product, "code": code,
+        "country_code": acc["country"], "session_name": acc["session_name"],
+        "phone": acc["phone"],
+        "payment_method": method, "total": total,
+        "status": "awaiting_payment",
+        "created_at": datetime.now().isoformat(),
+        "reviewed": False,
+    }
+    save_orders(orders)
+
+    if method == "stars":
+        try:
+            await bot.send_invoice(
+                chat_id=callback.from_user.id,
+                title=f"Аккаунт {acc['country'].upper()}",
+                description=f"Номер: {acc['phone']}\nЗаказ: {short_id}",
+                payload=f"acc_{short_id}",
+                provider_token="",
+                currency="XTR",
+                prices=[LabeledPrice(label="Аккаунт", amount=int(acc["price_stars"]))],
+                start_parameter=f"buy_{short_id}",
+            )
+            await callback.message.edit_text(
+                f"💳 <b>Счёт отправлен!</b>\n\n"
+                f"Заказ: {short_id}\n"
+                f"Сумма: {acc['price_stars']}⭐\n\n"
+                f"Нажмите «Оплатить» в сообщении выше.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Invoice error: {e}")
+            await callback.message.edit_text(f"❌ Ошибка оплаты: {e}")
+    else:
+        requisites = get_requisites("uah")
+        await callback.message.edit_text(
+            f"✅ Заказ {short_id}\n\n{requisites}\n\nПосле оплаты напишите @MaskYoY",
+            reply_markup=awaiting_payment_keyboard(short_id)
+        )
+
+    await state.clear()
+
+
+@dp.pre_checkout_query()
+async def pre_checkout(query: PreCheckoutQuery):
+    await query.answer(ok=True)
+
+
+@dp.message(F.successful_payment)
+async def successful_payment(message: types.Message):
+    payload = message.successful_payment.invoice_payload
+    short_id = payload.replace("acc_", "")
+
+    orders = load_orders()
+    order = orders.get(short_id)
+    if not order:
+        await message.answer("❌ Заказ не найден")
+        return
+
+    if order["status"] == "completed":
+        return
+
+    order["status"] = "completed"
+    order["completed_at"] = datetime.now().isoformat()
+    save_orders(orders)
+
+    await bot.send_message(message.from_user.id, "✅ <b>Оплата получена!</b>\n\nВыдаю аккаунт...", parse_mode="HTML")
+    await deliver_to_user(order, short_id)
+
+
+# ==================== ПРОМОКОД В CHECKOUT ====================
+@dp.callback_query(OrderStates.waiting_for_confirmation, F.data == "apply_promo_at_checkout")
+async def promo_checkout(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text("🎟 Введите промокод:")
+    await state.set_state(CheckoutPromoStates.waiting_for_promo_code)
+
+
+@dp.message(CheckoutPromoStates.waiting_for_promo_code, F.text)
+async def process_checkout_promo(message: types.Message, state: FSMContext):
+    code = message.text.strip().upper()
+    promos = load_promo_codes()
+    p = promos.get(code)
+    if not p or not p.get("is_active"):
+        await message.answer("❌ Не найден")
+        await state.clear()
+        return
+    await state.update_data(promo_code=code)
+    await message.answer(f"✅ Промокод {code} применён!")
+    await state.clear()
+
+
+# ==================== АДМИН: ПАНЕЛЬ ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📈 Панель управления")
+async def admin_dashboard_cmd(message: types.Message):
+    await show_dashboard(message)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_dashboard_refresh")
+async def dashboard_refresh(callback: types.CallbackQuery):
+    await callback.answer()
+    await show_dashboard(callback.message, edit=True)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_orders_dashboard")
+async def orders_dashboard(callback: types.CallbackQuery):
+    await callback.answer()
+    await show_admin_orders_page(callback.message, 0, edit=True)
+
+
+async def show_dashboard(target, edit=False):
+    orders = load_orders()
+    users = load_users()
+    counts = stock_count()
+
+    now = datetime.now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    rev_today = 0
+    total_rev = 0
+    completed = 0
+
+    for o in orders.values():
+        if o["status"] == "completed" and not isinstance(o.get("total", 0), str):
+            total_rev += o["total"]
+            completed += 1
+            if o.get("completed_at"):
+                try:
+                    if datetime.fromisoformat(o["completed_at"]) >= today:
+                        rev_today += o["total"]
+                except:
+                    pass
+
+    new_today = sum(1 for u in users.values()
+                    if u.get("first_seen") and datetime.fromisoformat(u["first_seen"]) >= today)
+
+    text = (f"📊 <b>ПАНЕЛЬ</b>\n"
+            f"💰 Сегодня: {rev_today:.2f} грн\n"
+            f"💰 Общий оборот: {total_rev:.2f} грн\n"
+            f"👥 Новых: {new_today}\n"
+            f"📦 Выполнено: {completed}/{len(orders)}\n"
+            f"📦 Склад: {sum(counts.values())} акк.\n"
+            f"👤 Юзеров: {len(users)}")
+
+    kb = admin_dashboard_keyboard()
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except:
+            await target.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# ==================== АДМИН: ПРОМОКОДЫ, АКЦИИ, УРОВНИ, РАССЫЛКИ, АНАЛИТИКА ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "🎟 Промокоды")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_promo_dashboard")
+async def admin_promo_menu(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+    kb = admin_promo_codes_keyboard()
+    text = "🎟 Промокоды:"
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=kb)
+        except:
+            await target.answer(text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "🔥 Акции")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_promotions_dashboard")
+async def admin_promo_actions(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+    kb = admin_promotions_keyboard()
+    if edit:
+        try:
+            await target.edit_text("🔥 Акции:", reply_markup=kb)
+        except:
+            await target.answer("🔥 Акции:", reply_markup=kb)
+    else:
+        await target.answer("🔥 Акции:", reply_markup=kb)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "⭐ Уровни")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_levels_dashboard")
+async def admin_levels(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+
+    levels = {
+        "Бронза": ("🥉", get_setting("level_bronze_min", 0), get_setting("level_bronze_discount", 0)),
+        "Серебро": ("🥈", get_setting("level_silver_min", 500), get_setting("level_silver_discount", 3)),
+        "Золото": ("🥇", get_setting("level_gold_min", 1500), get_setting("level_gold_discount", 5)),
+        "Платина": ("💎", get_setting("level_platinum_min", 3000), get_setting("level_platinum_discount", 7)),
+        "VIP": ("👑", get_setting("level_vip_min", 5000), get_setting("level_vip_discount", 10)),
+    }
+    text = "⭐ Уровни:\n"
+    for n, (e, m, d) in levels.items():
+        text += f"{e} {n}: от {m}₴ (-{d}%)\n"
+    kb = admin_levels_keyboard()
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=kb)
+        except:
+            await target.answer(text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📢 Рассылки")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_broadcasts_dashboard")
+async def admin_broadcasts(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+    kb = admin_broadcasts_keyboard()
+    if edit:
+        try:
+            await target.edit_text("📢 Автоматические рассылки:", reply_markup=kb)
+        except:
+            await target.answer("📢 Автоматические рассылки:", reply_markup=kb)
+    else:
+        await target.answer("📢 Автоматические рассылки:", reply_markup=kb)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "📊 Аналитика")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_dashboard")
+async def admin_analytics(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+    kb = admin_analytics_keyboard()
+    if edit:
+        try:
+            await target.edit_text("📊 Аналитика:", reply_markup=kb)
+        except:
+            await target.answer("📊 Аналитика:", reply_markup=kb)
+    else:
+        await target.answer("📊 Аналитика:", reply_markup=kb)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_by_days")
+async def analytics_days(callback: types.CallbackQuery):
+    await callback.answer()
+    orders = load_orders()
+    now = datetime.now()
+    data = {}
+    for i in range(30):
+        d = (now - timedelta(days=i)).strftime("%d.%m")
+        data[d] = {"rev": 0, "n": 0}
+    for o in orders.values():
+        if o["status"] == "completed" and o.get("completed_at"):
+            try:
+                dt = datetime.fromisoformat(o["completed_at"])
+                if (now - dt).days < 30 and not isinstance(o.get("total", 0), str):
+                    d = dt.strftime("%d.%m")
+                    if d in data:
+                        data[d]["rev"] += o["total"]
+                        data[d]["n"] += 1
+            except:
+                pass
+    text = "📈 По дням:\n"
+    for d in reversed(list(data.keys())):
+        if data[d]["rev"] > 0:
+            text += f"📅 {d}: {data[d]['rev']:.2f}₴ ({data[d]['n']})\n"
+    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_analytics_dashboard").as_markup()
+    await callback.message.edit_text(text, reply_markup=b)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_by_hours")
+async def analytics_hours(callback: types.CallbackQuery):
+    await callback.answer()
+    orders = load_orders()
+    h = {i: {"rev": 0, "n": 0} for i in range(24)}
+    for o in orders.values():
+        if o["status"] == "completed" and o.get("completed_at"):
+            try:
+                dt = datetime.fromisoformat(o["completed_at"])
+                if not isinstance(o.get("total", 0), str):
+                    h[dt.hour]["rev"] += o["total"]
+                    h[dt.hour]["n"] += 1
+            except:
+                pass
+    text = "⏰ По часам:\n"
+    for i in range(24):
+        if h[i]["n"] > 0:
+            text += f"{i:02d}:00 — {h[i]['rev']:.2f}₴ ({h[i]['n']})\n"
+    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_analytics_dashboard").as_markup()
+    await callback.message.edit_text(text, reply_markup=b)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_analytics_by_country")
+async def analytics_country(callback: types.CallbackQuery):
+    await callback.answer()
+    orders = load_orders()
+    stats = {}
+    for o in orders.values():
+        if o["status"] == "completed":
+            c = o.get("country_code", "??")
+            stats.setdefault(c, {"rev": 0, "n": 0})
+            if not isinstance(o.get("total", 0), str):
+                stats[c]["rev"] += o["total"]
+            stats[c]["n"] += 1
+    text = "🌍 По странам:\n"
+    for c, d in sorted(stats.items(), key=lambda x: -x[1]["rev"]):
+        text += f"• {c.upper()}: {d['rev']:.2f}₴ ({d['n']})\n"
+    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_analytics_dashboard").as_markup()
+    await callback.message.edit_text(text, reply_markup=b)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "🔗 Источники")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_traffic_dashboard")
+async def admin_traffic(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+    sources = load_traffic_sources()
+    text = "🔗 Источники:\n"
+    if not sources:
+        text += "<i>Нет данных</i>"
+    else:
+        for name, d in sorted(sources.items(), key=lambda x: -x[1].get("total_revenue", 0)):
+            text += f"📍 {name}: {d.get('total_revenue', 0):.2f}₴ ({d.get('total_purchases', 0)})\n"
+    b = InlineKeyboardBuilder().button(text="⬅️ Назад", callback_data="admin_dashboard_refresh").as_markup()
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=b, parse_mode="HTML")
+        except:
+            await target.answer(text, reply_markup=b, parse_mode="HTML")
+    else:
+        await target.answer(text, reply_markup=b, parse_mode="HTML")
+
+
+# ==================== АДМИН: РЕФЕРАЛЫ ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "👥 Рефералы")
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_referrals_dashboard")
+async def admin_referrals(event):
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+        target = event.message
+        edit = True
+    else:
+        target = event
+        edit = False
+
+    referrals = load_referrals()
+    bonus = get_setting("referral_bonus_percent", 5.0)
+    total = sum(len(r.get("referrals_list", [])) for r in referrals.values())
+    earned = sum(r.get("total_earned", 0) for r in referrals.values())
+
+    text = f"👥 Рефералы\n💰 Бонус: {bonus}%\n👥 Всего: {total}\n💸 Сумма: {earned:.2f}₴\n"
+    kb = admin_referrals_settings_keyboard()
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=kb)
+        except:
+            await target.answer(text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data == "admin_edit_referral_bonus")
+async def admin_edit_bonus(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    cur = get_setting("referral_bonus_percent", 5.0)
+    await callback.message.edit_text(f"Текущий бонус: {cur}%\nВведите новый:")
+    await state.set_state(AdminReferralSettingsStates.waiting_for_bonus_percent)
+
+
+@dp.message(AdminReferralSettingsStates.waiting_for_bonus_percent, F.text)
+async def save_bonus(message: types.Message, state: FSMContext):
+    try:
+        v = float(message.text)
+        if not (0 <= v <= 100):
+            raise ValueError
+    except:
+        await message.answer("❌ Число от 0 до 100")
+        return
+    s = load_settings()
+    s["referral_bonus_percent"] = v
+    save_settings(s)
+    await message.answer(f"✅ Бонус: {v}%", reply_markup=get_admin_reply_keyboard())
+    await state.clear()
+
+
+# ==================== АДМИН: ПОЛЬЗОВАТЕЛИ ====================
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "👤 Пользователи")
+async def admin_users_list(message: types.Message):
+    users = load_users()
+    if not users:
+        return await message.answer("📋 Нет пользователей", reply_markup=get_admin_reply_keyboard())
+    text = f"👤 ВСЕГО: {len(users)}\n"
+    for uid, u in sorted(users.items(), key=lambda x: x[1].get("first_seen", ""), reverse=True)[:10]:
+        text += f"👤 {u.get('full_name', '—')} (@{u.get('username', '—')})\nID: {uid}\n"
+    if len(users) > 10:
+        text += f"...и ещё {len(users) - 10}"
+    await message.answer(text, reply_markup=get_admin_reply_keyboard())
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "🏠 Главное меню")
+async def admin_main_menu(message: types.Message):
+    await message.answer("🏠 Админ-меню", reply_markup=get_admin_reply_keyboard())
+
+
+# ==================== АДМИН: ЧАТ С ПОКУПАТЕЛЕМ ====================
+@dp.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("admin_chat_with_user_"))
+async def admin_chat_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    oid = callback.data.replace("admin_chat_with_user_", "")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    if not rk:
+        return
+    await state.update_data(admin_chat_order_id=rk)
+    await callback.message.answer(f"💬 Введите сообщение покупателю по заказу {orders[rk].get('short_id', rk)}:")
+    await state.set_state(AdminChatStates.waiting_for_message)
+
+
+@dp.message(AdminChatStates.waiting_for_message, F.text)
+async def admin_chat_send(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    oid = data.get("admin_chat_order_id")
+    orders = load_orders()
+    rk = find_order_key(orders, oid)
+    if not rk:
+        await message.answer("❌ Не найден")
+        await state.clear()
+        return
+    order = orders[rk]
+    try:
+        await bot.send_message(order["user_id"], f"💬 Админ:\n{message.text}")
+        await message.answer("✅ Отправлено", reply_markup=get_admin_reply_keyboard())
+    except Exception as e:
+        await message.answer(f"❌ {e}", reply_markup=get_admin_reply_keyboard())
+    await state.clear()
+
+
+# ==================== ФОНОВЫЕ ЗАДАЧИ ====================
+async def auto_broadcast_scheduler():
+    while True:
+        try:
+            broadcasts = load_broadcasts()
+            users = load_users()
+            orders = load_orders()
+            now = datetime.now()
+
+            for bid, bc in broadcasts.items():
+                if not bc.get("is_active"):
+                    continue
+                days_inactive = bc.get("days_inactive")
+                if not days_inactive:
+                    continue
+
+                for uid_str, u in users.items():
+                    uid = int(uid_str)
+                    user_orders = [o for o in orders.values() if o["user_id"] == uid and o["status"] == "completed"]
+                    if not user_orders:
+                        continue
+                    last = max(user_orders, key=lambda x: x.get("completed_at", x.get("created_at", "")))
+                    try:
+                        last_dt = datetime.fromisoformat(last.get("completed_at", last["created_at"]))
+                    except:
+                        continue
+                    if (now - last_dt).days == days_inactive:
+                        sent_key = f"sent_bc_{bid}"
+                        if u.get(sent_key):
+                            continue
+                        try:
+                            kb = None
+                            if bc.get("button_text") and bc.get("button_url"):
+                                kb = InlineKeyboardBuilder().button(text=bc["button_text"], url=bc["button_url"]).as_markup()
+                            await bot.send_message(uid, bc["message_text"], reply_markup=kb, parse_mode="HTML")
+                            users[uid_str][sent_key] = datetime.now().isoformat()
+                            save_users(users)
+                            await asyncio.sleep(0.1)
+                        except:
+                            pass
+        except Exception as e:
+            logger.error(f"Broadcast scheduler: {e}")
+        await asyncio.sleep(3600)
+
+
+# ==================== ГЛОБАЛЬНАЯ ОШИБКА ====================
+@dp.errors()
+async def error_handler(event):
+    logger.error(f"Update error: {event.exception}")
+    return True
+
+
+# ==================== ЗАПУСК ====================
+async def main():
+    print("=" * 50)
+    print("OverPass Store Bot v2 — АВТОМАТИЗАЦИЯ")
+    print("=" * 50)
+
+    await bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(1)
+
+    # Запускаем watchers для уже проданных аккаунтов
+    if os.path.exists(ACCOUNTS_DIR):
+        for c in os.listdir(ACCOUNTS_DIR):
+            cd = country_dir(c)
+            if not os.path.isdir(cd):
+                continue
+            for f in os.listdir(cd):
+                if f.endswith(".json"):
+                    meta = load_meta(c, f.replace(".json", ""))
+                    if meta and meta.get("sold_to"):
+                        asyncio.create_task(start_code_watcher(c, meta["session_name"], meta["sold_to"]))
+
+    print("Бот запущен!")
+    asyncio.create_task(auto_broadcast_scheduler())
+
+    try:
+        await dp.start_polling(bot, drop_pending_updates=True)
+    except Exception as e:
+        print(f"Ошибка: {e}")
+    finally:
+        await bot.session.close()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Остановлен")
+    except Exception as e:
+        print(f"Ошибка запуска: {e}")
+        sys.exit(1)
