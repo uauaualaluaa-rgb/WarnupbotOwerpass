@@ -15,7 +15,7 @@ from telethon.errors import SessionPasswordNeededError, FloodWaitError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
 
 BOT_TOKEN = "8862811439:AAGKNCDLKgfHnhxsKoTH3CuzaLfnPb659R4"
-API_ID = 8694433490
+API_ID = 38387697
 API_HASH = "e8fb7f7163498eb28231e45071fe92c0"
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
